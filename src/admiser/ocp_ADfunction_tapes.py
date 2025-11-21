@@ -3,7 +3,7 @@ import inspect
 import numpy as np
 import cppad_py
 
-from admiser import L_eps, smooth_abs
+from .ocp_smooth_utils import L_eps, smooth_abs
 
 def _call_builder(builder, au, atheta, problem):
     if builder is None:

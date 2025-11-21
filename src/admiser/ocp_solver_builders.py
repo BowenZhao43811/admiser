@@ -3,8 +3,8 @@
 import numpy as np
 from scipy.optimize import minimize
 
-from admiser import build_ad_tapes
-from admiser import optimize_fun_class
+from .ocp_ADfunction_tapes import build_ad_tapes
+from .ocp_ADgradient_builders import optimize_fun_class
 
 class OCPSolver:
     """
