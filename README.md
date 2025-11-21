@@ -44,39 +44,17 @@ pip install "admiser @ git+https://github.com/BowenZhao43811/admiser.git@v0.1.0"
 
 ## Quickstart
 
-Define your optimal control problem in the following formate and let ADMISER solve it.
-```py
-# demo_run.py
-import numpy as np
-from functools import partial
-from ADMISER.ocp_problem import OCPProblem
-from ADMISER.ocp_solver import OCPSolver
-from ADMISER.integrators import rk4_substeps
-from ADMISER.ocp_function_builders import make_builders
+The jupyter notebook document `main_solver.ipynb` distributed together with the package records the solution results of many examples from different industries. Definitions of these example problems can be found in the `admiser.examples.ProblemName.py`
 
-# Grid & simple 2D system
-N, T = 50, 1.0; dt = T/N
-x0   = np.array([0.0, -1.0], float)
+### find the accompanying example solution 
+```sh
+from admiser.examples import get_notebook_path
 
-def dyn(x, u, th=None): return np.array([x[1], -x[1] + u[0]], dtype=object)
-def L(t, x, u, th):     return x[0]*x[0] + x[1]*x[1] + 1e-3*(u[0]*u[0])
-
-objective_builder, constraint_builder = make_builders(
-    dyn=dyn, L=L, Phi=None, terminal_eq=None, integral_eqs=None, quad='rk4-mid'
-)
-
-problem = OCPProblem(
-    N=N, dt=dt, x0=x0, dyn=dyn,
-    integrator=partial(rk4_substeps, m_sub=5),
-    nu=1, nx=2,
-    objective_builder=objective_builder,
-    constraint_builder=constraint_builder,
-    control_bounds_builder=lambda p: [(-10.0, 10.0)]*(p.N*p.nu),
-)
-
-res = OCPSolver(problem).build().solve(maxiter=400, ftol=1e-9, disp=True)
-print("J* =", res["J_opt"])
+path = get_notebook_path()
+print("Notebook path:", path)
 ```
+Grab the file path then open it with your prefered editor (don't forget to select your venv where admiser was installed).
+
 > ℹ️ **Figure Output**: States and control trajectories ploting is not integrated into the solver, instead, the flaxibility is given to the users. User can access raw optimization reaults of control, system parameters, objective, state, residual on the cononical equality and inequalities by 
 `res["U_opt"]`
 `res.get("theta_opt", None)`
@@ -84,6 +62,8 @@ print("J* =", res["J_opt"])
 `res["X_opt"]`
 `res.get("eq_res", None)`
 `res.get("ineq_res", None)`.
+
+> 😊 However, a chart generator template `solve_A_my_problem_template.py` can be access in `admiser.templates`
 
 
 ## Core Ideas
@@ -98,13 +78,13 @@ print("J* =", res["J_opt"])
 
 ## Problem Definition Template
 
-Create a problem file (e.g., `my_problem.py`) using the provided template pattern:
+Create a problem file (e.g., `my_problem.py`) using the following simple template pattern (😊 Full template with all supported constraints `my_A_problem_temeplate.py` can be found in `admiser.templates`):
 ```py
 import numpy as np
 from functools import partial
-from ADMISER.ocp_problem import OCPProblem
-from ADMISER.integrators import rk4_substeps
-from ADMISER.ocp_function_builders import make_builders
+from admiser import OCPProblem
+from admiser import rk4_substeps
+from admiser import make_builders
 
 # Grid
 T, N = 1.0, 100
@@ -145,7 +125,7 @@ __all__ = ["problem", "N", "dt"]
 Then solve from a small driver script or from Jupyter Notebook:
 
 ```py
-from ADMISER.ocp_solver import OCPSolver
+from admiser import OCPSolver
 from my_problem import problem
 
 res = OCPSolver(problem).build().solve(maxiter=800, ftol=1e-9, disp=True)
