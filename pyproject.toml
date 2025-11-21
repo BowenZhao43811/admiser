@@ -23,3 +23,8 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+include = ["admiser", "admiser.*"]
+
+# 指定要随包带上的数据文件（比如 notebooks）
+[tool.setuptools.package-data]
+"admiser.examples" = ["notebooks/*.ipynb"]
