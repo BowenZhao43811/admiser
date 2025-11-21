@@ -1,0 +1,185 @@
+# ADMISER — A Modern Control-Parametrization OCP Solver (Python + CppAD_py)
+
+ADMISER is a **research-grade optimal control** toolkit that implements Teo’s **Control Parametrization** methodology with modern Python ergonomics:
+- ✅ **Control Parametrization** (piecewise-constant controls; policy/feedback parametrization)
+- ✅ **Constraint Transcription** (smooth path inequalities → canonical integral constraints)
+- ✅ **Canonical constraints**: terminal eq/ineq, integral eq/ineq, path eq/ineq (smoothed)
+- ✅ **Multi-substep RK4** integrator with substep quadrature callbacks
+- ✅ **Automatic Differentiation** via `cppad_py` tapes (objective + constraints Jacobians)
+- ✅ **SciPy SLSQP** driver (or plug in your favorite optimizer)
+
+> ⚠️ **Prereq**: `cppad_py` requires a local build on Linux/WSL. ADMISER provides a helper script to build and install it.
+
+---
+
+## Table of Contents
+- [Install](#install)
+- [Quickstart](#quickstart)
+- [Core Ideas](#core-ideas)
+- [Problem Definition Template](#problem-definition-template)
+- [Registering Constraints](#registering-constraints)
+- [Free Terminal Time Transforme](#free-terminal-time)
+- [Cite / Acknowledge](#cite--acknowledge)
+
+---
+
+## Install
+
+### Build and install `cppad_py`.
+We ship a helper that creates a local virtualenv (in `tools/`), builds a wheel, and installs it:
+```bash
+cd ~/ADMISER/tools
+chmod +x build_cppad_py.sh
+./build_cppad_py.sh           # creates tools/.venv and installs cppad_py inside
+source .venv/bin/activate     # activate the venv for development
+```
+
+### install `ADMISER`
+From the repository root:
+```bush
+pip install -e
+```
+> ⚠️ **Dependencies**: Python ≥ 3.10, `numpy`, `scipy`, `matplotlib`. ADMISER assumes `cppad_py` is importable in the same environment.
+
+## Quickstart
+
+Define your optimal control problem in the following formate and let ADMISER solve it.
+```py
+# demo_run.py
+import numpy as np
+from functools import partial
+from ADMISER.ocp_problem import OCPProblem
+from ADMISER.ocp_solver import OCPSolver
+from ADMISER.integrators import rk4_substeps
+from ADMISER.ocp_function_builders import make_builders
+
+# Grid & simple 2D system
+N, T = 50, 1.0; dt = T/N
+x0   = np.array([0.0, -1.0], float)
+
+def dyn(x, u, th=None): return np.array([x[1], -x[1] + u[0]], dtype=object)
+def L(t, x, u, th):     return x[0]*x[0] + x[1]*x[1] + 1e-3*(u[0]*u[0])
+
+objective_builder, constraint_builder = make_builders(
+    dyn=dyn, L=L, Phi=None, terminal_eq=None, integral_eqs=None, quad='rk4-mid'
+)
+
+problem = OCPProblem(
+    N=N, dt=dt, x0=x0, dyn=dyn,
+    integrator=partial(rk4_substeps, m_sub=5),
+    nu=1, nx=2,
+    objective_builder=objective_builder,
+    constraint_builder=constraint_builder,
+    control_bounds_builder=lambda p: [(-10.0, 10.0)]*(p.N*p.nu),
+)
+
+res = OCPSolver(problem).build().solve(maxiter=400, ftol=1e-9, disp=True)
+print("J* =", res["J_opt"])
+```
+> ℹ️ **Figure Output**: States and control trajectories ploting is not integrated into the solver, instead, the flaxibility is given to the users. User can access raw optimization reaults of control, system parameters, objective, state, residual on the cononical equality and inequalities by 
+`res["U_opt"]`
+`res.get("theta_opt", None)`
+`res["J_opt"]`
+`res["X_opt"]`
+`res.get("eq_res", None)`
+`res.get("ineq_res", None)`.
+
+
+## Core Ideas
+
+- **Control Parametrization**: treat controls as decision variables over segments; states propagate by integrating dynamics.
+
+- **Constraint Transcription**: 
+    - *Path inequality* $h(t) ≤ 0$ → smooth hinge $L_ε(h)$; enforce $∫ L_ε(h) dt ≤ γ$ (with $γ ≥ 0$; typically $γ=ε/4$).
+    - *Path equality* $h(t)=0$ → ∫ h^2 dt = 0$.
+
+- **AD with `cppad_py`**: build AD tapes (computational graph) for the objective $G_0(z)$ and the $i-th$ constraints $G_i(z)$ **once**; obtain function value, gradient/Jacobian for `SLSQP`.
+
+## Problem Definition Template
+
+Create a problem file (e.g., `my_problem.py`) using the provided template pattern:
+```py
+import numpy as np
+from functools import partial
+from ADMISER.ocp_problem import OCPProblem
+from ADMISER.integrators import rk4_substeps
+from ADMISER.ocp_function_builders import make_builders
+
+# Grid
+T, N = 1.0, 100
+dt   = T / N
+nx, nu = 2, 1
+x0   = np.array([0.0, -1.0], float)
+
+# Dynamics and stage cost
+def dyn(x, u, theta=None):
+    x1, x2 = x
+    return np.array([x2, -x1 + u[0]], dtype=object)
+
+def L(t, x, u, theta):
+    return x[0]*x[0] + x[1]*x[1] + 0.25*(u[0]*u[0])
+
+# No terminal cost, no terminal equality, no integral equalities
+objective_builder, constraint_builder = make_builders(
+    dyn=dyn, L=L, Phi=None, terminal_eq=None, integral_eqs=None, quad='rk4-mid'
+)
+
+# Control bounds
+def control_bounds_builder(p): return [(-10.0, 10.0)] * (p.N * p.nu)
+
+# Assemble
+problem = OCPProblem(
+    N=N, dt=dt, x0=x0, dyn=dyn,
+    integrator=partial(rk4_substeps, m_sub=10),
+    nu=nu, nx=nx,
+    objective_builder=objective_builder,
+    constraint_builder=constraint_builder,
+    control_bounds_builder=control_bounds_builder,
+)
+
+__all__ = ["problem", "N", "dt"]
+
+```
+
+Then solve from a small driver script or from Jupyter Notebook:
+
+```py
+from ADMISER.ocp_solver import OCPSolver
+from my_problem import problem
+
+res = OCPSolver(problem).build().solve(maxiter=800, ftol=1e-9, disp=True)
+print(res["J_opt"])
+```
+
+## Registering Constraints
+
+All constraints are canonicalized and handled uniformly inside the tapes:
+- Terminal equality: $ψ(x_T, θ)=0$
+    ```py
+    problem.add_terminal_eq(lambda xT, th: xT[0] - cppad_py.a_double(1.0))  # x1(T) = 1
+    ```
+- Terminal inequality: $φ(x_T, θ) ≤ 0$
+    ```py
+    problem.add_terminal_ineq(lambda xT, th: xT[0] - cppad_py.a_double(2.0), sense="<=")  # x1(T) ≤ 2
+    ```
+- Integral equality: $∫ q(t,x,u,θ) dt = b$
+    ```py
+    problem.add_integral_eq(lambda t,x,u,th: x[0], target=1.0)
+    ```
+- Integral inequality: $∫ q(t,x,u,θ) dt ≤ b$
+    ```py
+    problem.add_integral_ineq(lambda t,x,u,th: u[0]*u[0], bound=5.0, sense="<=")
+    ```
+
+- Path inequality: $h(t,x,u,θ) ≤ b$
+    ```py
+    def h_ineq(t, x, u, th): return x[1] - 1.0
+    problem.add_path_ineq(h_ineq, eps=1e-3, gamma=0.25e-3)
+    ```
+- Path equality: e.g.$h(t,x,u,θ) = 0$
+    ```py
+    def h_eq(t, x, u, th): return x[0]^2+0.36*u[1]-0.25
+    problem.add_path_eq(h_eq, mode="L2")
+    ```
+> ℹ️ **Note** Path constraints are transformed into integral form by applying the constraints transcription techniques.
+## Free Terminal Time

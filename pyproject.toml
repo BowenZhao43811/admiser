@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "admiser"
+version = "0.1.0"
+description = "A unified optimal control problem solver inspired by Teo's control parametrization approaches enhanced by automatic differentiation"
+readme = "README.md"
+license = "MIT"
+authors = [{name = "Bowen Zhao"}]
+requires-python = ">=3.9"
+dependencies = [
+  "numpy",
+  "scipy",
+  "matplotlib",
+  "cppad_py @ git+https://github.com/bradbell/cppad_py.git",
+]
+
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
