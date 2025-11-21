@@ -6,7 +6,7 @@ ADMISER is a **research-grade optimal control** toolkit that implements Teo’s 
 - ✅ **Canonical constraints**: terminal eq/ineq, integral eq/ineq, path eq/ineq (smoothed)
 - ✅ **Multi-substep RK4** integrator with substep quadrature callbacks
 - ✅ **Automatic Differentiation** via `cppad_py` tapes (objective + constraints Jacobians)
-- ✅ **SciPy SLSQP** driver (or plug in your favorite optimizer)
+- ✅ **SQP** method for solving nonlinear programming problem
 
 > ⚠️ **Prereq**: `cppad_py` requires a local build on Linux/WSL. ADMISER provides a helper script to build and install it.
 
@@ -25,21 +25,22 @@ ADMISER is a **research-grade optimal control** toolkit that implements Teo’s 
 
 ## Install
 
-### Build and install `cppad_py`.
-We ship a helper that creates a local virtualenv (in `tools/`), builds a wheel, and installs it:
-```bash
-cd ~/ADMISER/tools
-chmod +x build_cppad_py.sh
-./build_cppad_py.sh           # creates tools/.venv and installs cppad_py inside
-source .venv/bin/activate     # activate the venv for development
+### create venv.
+Create venv to Keep a clear global environment 
+```sh
+python3 -m venv ~/admiser_venv
+source ~/admiser_venv/bin/activate
+pip install --upgrade pip
 ```
 
 ### install `ADMISER`
 From the repository root:
-```bush
-pip install -e
+```sh
+pip install "admiser @ git+https://github.com/BowenZhao43811/admiser.git@v0.1.0"
 ```
-> ⚠️ **Dependencies**: Python ≥ 3.10, `numpy`, `scipy`, `matplotlib`. ADMISER assumes `cppad_py` is importable in the same environment.
+> ⚠️ **Python version requirement**: Python ≥ 3.10
+
+> ⚠️**Dependencies** `numpy`, `scipy`, `matplotlib`, `cppad_py` (Auto installed).
 
 ## Quickstart
 
