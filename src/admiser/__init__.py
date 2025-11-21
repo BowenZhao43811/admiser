@@ -1,5 +1,3 @@
-from _version import __version__
-
 # 常用API直接暴露
 from ocp_problem_builders import OCPProblem
 from ocp_solver_builders import OCPSolver
