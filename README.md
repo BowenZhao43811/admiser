@@ -157,7 +157,7 @@ All constraints are canonicalized and handled uniformly inside the tapes:
     def h_ineq(t, x, u, th): return x[1] - 1.0
     problem.add_path_ineq(h_ineq, eps=1e-3, gamma=0.25e-3)
     ```
-- Path equality: e.g.$h(t,x,u,θ) = 0$
+- Path equality: e.g. $h(t,x,u,θ) = 0$
     ```py
     def h_eq(t, x, u, th): return x[0]^2+0.36*u[1]-0.25
     problem.add_path_eq(h_eq, mode="L2")
