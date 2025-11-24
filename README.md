@@ -175,7 +175,7 @@ $$
 \end{aligned}
 $$
 
-> 😊 Examples can be found in `admiser\examples`.
+> 😊 Examples can be found in `admiser\examples\my_free_terminal_time.py` and `admiser\examples\my_free_terminal_time2.py`.
 
 
 ## Cite / Acknowledge
