@@ -25,6 +25,6 @@ package-dir = {"" = "src"}
 where = ["src"]
 include = ["admiser", "admiser.*"]
 
-# 指定要随包带上的数据文件（比如 notebooks）
+# include examples result
 [tool.setuptools.package-data]
 "admiser.examples" = ["notebooks/*.ipynb"]
