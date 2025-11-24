@@ -1,6 +1,8 @@
 # ADMISER — A Modern Control-Parametrization OCP Solver (Python + CppAD_py)
 
-ADMISER is a **research-grade optimal control** toolkit that implements Teo’s **Control Parametrization** methodology with modern Python ergonomics:
+ADMISER is a **Numerical Optimal Control** toolkit that incorporates **Automatic Differentiation** for gradient computation within [Professor Kok Lay Teo](https://sunwayuniversity.edu.my/school-of-mathematical-sciences/staff-profiles/professor-teo-kok-lay)'s **Control Parametrization** framework in Python.
+
+
 - ✅ **Control Parametrization** (piecewise-constant controls; policy/feedback parametrization)
 - ✅ **Constraint Transcription** (smooth path inequalities → canonical integral constraints)
 - ✅ **Canonical constraints**: terminal eq/ineq, integral eq/ineq, path eq/ineq (smoothed)
@@ -9,7 +11,7 @@ ADMISER is a **research-grade optimal control** toolkit that implements Teo’s 
 - ✅ **Automatic Differentiation** via `cppad_py` tapes (objective + constraints Jacobians)
 - ✅ **SQP** method for solving nonlinear programming problem
 
-> ⚠️ **Prereq**: `cppad_py` requires a local build on Linux/WSL. ADMISER provides a helper script to build and install it.
+> ⚠️ **Strict prerequest**: `cppad_py` requires a local build on Linux/WSL. ADMISER provides a helper script to build and install it.
 
 ---
 
@@ -180,7 +182,7 @@ $$
 
 ## Cite / Acknowledge
 
-Theoretical Framework for control parametrization originally proposed by Professor Kok Lay Teo can be found in:
+Theoretical Framework for control parametrization originally proposed by Professor Kok Lay Teo and other co-researchers can be found in:
 
 **Goh, C.J., & Teo, K.L.** (1988). *Control parametrization: a unifiedapproach to optimal control problems with general constraints*.**Automatica**, 24(1), 3–18.  
   
