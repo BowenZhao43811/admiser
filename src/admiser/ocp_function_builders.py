@@ -1,6 +1,6 @@
 # ocp_function_builders.py
 """
-make_builders 仅负责构建 objective_builder（∫L + Φ）。
+make_builders 仅负责构建 objective_builder（\int L + Φ）。
 所有约束（终端/积分/路径，等式与不等式）请使用 OCPProblem.add_* API 注册，
 由 tapes.build_ad_tapes 在一次 rollout 中统一构建 eq_ad / ineq_ad。
 
@@ -60,7 +60,7 @@ def make_builders(
             J    = J + h_ad * Lval
 
         def _dt_k(_k):
-            # 预留 CPET 钩子（未实现则用常数 dt）
+            # 预留 CPET 接口（未实现则用常数 dt）
             if hasattr(problem, "_current_dt") and callable(problem._current_dt):
                 return problem._current_dt(_k)
             return cppad_py.a_double(problem.dt)

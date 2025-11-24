@@ -61,7 +61,7 @@ def build_ad_tapes(Utheta_template, problem):
         t = cppad_py.a_double(0.0)
 
         def _dt_k(_k):
-            # 预留 CPET 钩子（如未实现，使用常数 dt）
+            # 预留 CPET 接口（如未实现，使用常数 dt）
             return cppad_py.a_double(problem.dt)
 
         f = _bind_dyn_with_theta_ad(problem.dyn, ath)
@@ -77,7 +77,7 @@ def build_ad_tapes(Utheta_template, problem):
             for i, spec in enumerate(problem.int_eq_specs):
                 q = spec["qfun"](_t, x_sub, u_sub, ath)
                 eq_int_acc[i] = eq_int_acc[i] + h_ad * q
-            # 路径等式：∫ h^2 dt 或 ∫ smooth|h| dt
+            # 路径等式：\int h^2 dt 或 \int smooth|h| dt
             for j, spec in enumerate(problem.path_eq_specs):
                 h = spec["hfun"](_t, x_sub, u_sub, ath)
                 if spec["mode"] == "L2":
@@ -191,7 +191,7 @@ def build_ad_tapes(Utheta_template, problem):
             else:
                 for v in phi: C.append(v)
 
-        # 积分不等式：<= : bound - ∫q ≥ 0； >= : ∫q - bound ≥ 0
+        # 积分不等式：<= : bound - \int q ≥ 0； >= : \int q - bound ≥ 0
         for i, spec in enumerate(problem.int_ineq_specs):
             b = cppad_py.a_double(spec["bound"])
             if spec["sense"] == "<=":
@@ -199,7 +199,7 @@ def build_ad_tapes(Utheta_template, problem):
             else:
                 C.append(ineq_int_acc[i] - b)
 
-        # 路径不等式：gamma - ∫L_eps ≥ 0
+        # 路径不等式：gamma - \int L_eps ≥ 0
         for j, spec in enumerate(problem.path_ineq_specs):
             gamma = cppad_py.a_double(spec["gamma"])
             C.append(gamma - path_ineq_acc[j])

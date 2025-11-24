@@ -26,7 +26,7 @@ def dyn(x, u, atheta):
     dx3 = uu
     return np.array([dx1, dx2, dx3], dtype=object)
 
-# 目标：min -z1  → 用 Phi
+# 目标：min -z1  -> 用 Phi
 def Phi(xT_ad, atheta):
     return -atheta[0]
 
