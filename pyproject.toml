@@ -23,7 +23,6 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["admiser", "admiser.*"]
 
 # include examples result
 [tool.setuptools.package-data]
