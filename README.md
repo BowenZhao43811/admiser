@@ -1,4 +1,4 @@
-# ADMISER — A Modern Control-Parametrization OCP Solver (Python + CppAD_py)
+# ADMISER — Automatic Differentiation Ehanced Modern Control-Parametrization OCP Solver
 
 ADMISER is a **Numerical Optimal Control** toolkit that incorporates **Automatic Differentiation** for gradient computation within [Professor Kok Lay Teo](https://sunwayuniversity.edu.my/school-of-mathematical-sciences/staff-profiles/professor-teo-kok-lay)'s **Control Parametrization** framework in Python.
 
