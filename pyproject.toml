@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "admiser"
-version = "0.1.0"
+version = "0.1.1"
 description = "A unified optimal control problem solver inspired by Teo's control parametrization approaches enhanced by automatic differentiation"
 readme = "README.md"
 license = "MIT"

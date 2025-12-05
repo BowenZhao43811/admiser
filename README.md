@@ -39,7 +39,7 @@ pip install --upgrade pip
 ### install `ADMISER`
 From the repository root:
 ```sh
-pip install "admiser @ git+https://github.com/BowenZhao43811/admiser.git@v0.1.0"
+pip install "admiser @ git+https://github.com/BowenZhao43811/admiser.git"
 ```
 > ⚠️ **Python version requirement**: Python ≥ 3.10
 
