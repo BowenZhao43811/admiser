@@ -13,9 +13,10 @@ requires-python = ">=3.9"
 dependencies = [
   "numpy",
   "scipy",
-  "matplotlib",
-  "cppad_py @ git+https://github.com/bradbell/cppad_py.git",
+  "matplotlib"
 ]
+[project.scripts]
+admiser-install-cppad = "admiser.tools.install_cppad_py_cli:main"
 
 
 [tool.setuptools]
@@ -27,3 +28,4 @@ where = ["src"]
 # include examples result
 [tool.setuptools.package-data]
 "admiser.examples" = ["notebooks/*.ipynb"]
+"admiser.tools" = ["build_cppad_py.sh"]
