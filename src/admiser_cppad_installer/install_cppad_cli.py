@@ -18,7 +18,7 @@ def main() -> None:
 
     # 通过本包名定位被打包进去的 bash 脚本
     try:
-        script = files("admiser_cppad_installer") / "install_cppad_stack.sh"
+        script = files("admiser_cppad_installer") / "bulid_cppad.sh"
     except Exception as exc:  # 理论上不该发生，除非包没装好
         print(f"错误：无法定位安装脚本：{exc}", file=sys.stderr)
         raise SystemExit(1)

@@ -28,4 +28,4 @@ where = ["src"]
 # include examples result
 [tool.setuptools.package-data]
 "admiser.examples" = ["notebooks/*.ipynb"]
-"admiser_cppad_installer" = ["install_cppad_stack.sh"]
+"admiser_cppad_installer" = ["build_cppad.sh"]
