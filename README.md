@@ -67,7 +67,7 @@ Create venv to Keep a clear global environment
 ```sh
 python3 -m venv ~/admiser_venv
 source ~/admiser_venv/bin/activate
-pip install --upgrade pip
+pip install --upgrade pip wheel setuptools
 ```
 
 ### install `ADMISER`
