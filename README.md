@@ -28,6 +28,40 @@ ADMISER is a **Numerical Optimal Control** toolkit that incorporates **Automatic
 
 ## Install
 
+### install WSL on Windows
+Install wsl and linux distributation.
+```powershell
+# install system components for WSL
+wsl --install
+# install Linux distributation on WSL
+wsl.exe --install Ubuntu
+```
+> ⚠️ Minimum requirements for running the package are provided, for details on WSL please refer to Microsoft's official documentations.
+
+Creat user in Linux system
+```powershell
+Create a default Unix user account: ****** (Input your user name)
+# password won't show in Linux.
+New password: ****** (Input your user password)
+Retype new password: ****** (Reinput your user password)
+passwd: password updated successfully # success!
+```
+
+### update Ubuntu system components
+```sh
+# Switch from windows file system to linux
+cd ~
+# update
+sudo apt update
+sudo apt upgrade -y
+```
+
+### install Python Develope tools
+Install python, package management tools, vertial environment management tools, and python development tools on Linux `python3`, `pip`, `venv`, `dev`.
+```sh
+sudo apt install -y python3 python3-pip python3-venv python3-dev
+```
+
 ### create venv.
 Create venv to Keep a clear global environment 
 ```sh
@@ -43,7 +77,13 @@ pip install "admiser @ git+https://github.com/BowenZhao43811/admiser.git"
 ```
 > ⚠️ **Python version requirement**: Python ≥ 3.10
 
-> ⚠️**Dependencies** `numpy`, `scipy`, `matplotlib`, `cppad_py` (Auto installed).
+> ⚠️**Dependencies** `numpy`, `scipy`, `matplotlib`, `cppad_py` (Auto installations are provided in the next subsection).
+
+### install cppad and build cppad_py
+```sh
+admiser-install-cppad
+```
+> ⚠️ Minimum requirements for running the package are provided, for details on CppAD and CppAD_Py please refer to COIN's official documentations.
 
 ## Quickstart
 
@@ -96,9 +136,7 @@ def L(t, x, u, theta):
     return x[0]*x[0] + x[1]*x[1] + 0.25*(u[0]*u[0])
 
 # No terminal cost, no terminal equality, no integral equalities
-objective_builder, constraint_builder = make_builders(
-    dyn=dyn, L=L, Phi=None, terminal_eq=None, integral_eqs=None, quad='rk4-mid'
-)
+objective_builder = make_builders(dyn=dyn, L=L, Phi=None, terminal_eq=None, integral_eqs=None, quad='rk4-mid')
 
 # Control bounds
 def control_bounds_builder(p): return [(-10.0, 10.0)] * (p.N * p.nu)
@@ -109,7 +147,6 @@ problem = OCPProblem(
     integrator=partial(rk4_substeps, m_sub=10),
     nu=nu, nx=nx,
     objective_builder=objective_builder,
-    constraint_builder=constraint_builder,
     control_bounds_builder=control_bounds_builder,
     ntheta=0)
 ```
