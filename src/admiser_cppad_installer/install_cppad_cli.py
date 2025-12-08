@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-from importlib.resources import files
 from pathlib import Path
 
 
@@ -16,14 +15,10 @@ def main() -> None:
     print("==============================================")
     print()
 
-    # 通过本包名定位被打包进去的 bash 脚本
-    try:
-        script = files("admiser_cppad_installer") / "bulid_cppad.sh"
-    except Exception as exc:  # 理论上不该发生，除非包没装好
-        print(f"错误：无法定位安装脚本：{exc}", file=sys.stderr)
-        raise SystemExit(1)
+    # 用 __file__ 所在目录定位 .sh 文件
+    pkg_dir = Path(__file__).resolve().parent
+    script_path = pkg_dir / "build_cppad.sh"
 
-    script_path = Path(script)
     if not script_path.is_file():
         print(f"错误：找不到脚本文件：{script_path}", file=sys.stderr)
         raise SystemExit(1)
