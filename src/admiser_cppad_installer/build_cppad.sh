@@ -47,15 +47,33 @@ python -m pip install -U pip wheel setuptools
 echo
 
 # [3/6] 克隆或更新 cppad_py 仓库
-echo "[3/6] Clone / update cppad_py..."
-if [ ! -d cppad_py ]; then
-  git clone https://github.com/bradbell/cppad_py.git
-fi
-cd cppad_py
-git fetch --all
-git checkout "${CPPAD_PY_TAG}"
-git pull --ff-only || true
+# 创建临时目录：形如 /tmp/cppad_py_build_XXXXXX
+CPPAD_PY_BUILD_DIR="$(mktemp -d -t cppad_py_build_XXXXXX)"
+echo "  临时构建目录: ${CPPAD_PY_BUILD_DIR}"
+
+# 定义清理函数：脚本结束时自动删除临时目录
+cleanup() {
+  if [ -n "${CPPAD_PY_BUILD_DIR:-}" ] && [ -d "${CPPAD_PY_BUILD_DIR}" ]; then
+    echo "清理临时目录: ${CPPAD_PY_BUILD_DIR}"
+    rm -rf "${CPPAD_PY_BUILD_DIR}"
+  fi
+}
+trap cleanup EXIT
+
+# 克隆指定 tag（或分支），仅拉取该版本，避免多余历史
+git clone \
+  --branch "${CPPAD_PY_TAG}" \
+  --depth 1 \
+  https://github.com/bradbell/cppad_py.git \
+  "${CPPAD_PY_BUILD_DIR}"
+
 echo
+
+# 记录当前工作目录，构建完再切回来
+OLDPWD="$(pwd)"
+
+# 进入临时构建目录
+cd "${CPPAD_PY_BUILD_DIR}"
 
 # [4/6] 使用 cppad_py 自带脚本安装 CppAD
 echo "[4/6] Install CppAD via cppad_py helper scripts..."
@@ -73,6 +91,9 @@ echo
 echo "Install cppad_py wheel into current environment..."
 python -m pip install dist/*.whl
 echo
+
+# 回到原工作目录
+cd "${OLDPWD}"
 
 # [6/6] 快速数值检查
 echo "[6/6] Quick check..."
