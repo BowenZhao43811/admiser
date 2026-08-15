@@ -40,7 +40,7 @@ problem = OCPProblem(
     control_bounds_builder=control_bounds_builder,
     ntheta=0,
 )
-problem.path_quad_mode = 'rk4'
+problem.quad_scheme = 'rk4'
 
 # 路径不等式：h(t) ≤ 0
 def hfun(t, x, u, th):

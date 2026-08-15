@@ -2,10 +2,10 @@
 import numpy as np
 import cppad_py
 
-from .ocp_integrators_utils import resolve_quad_name
+from .ocp_integrators_utils import validate_quad_scheme
 
 #: 包级默认求积方案：与状态同为 4 阶，且不增加动力学求值次数
-DEFAULT_QUAD = 'rk4'
+DEFAULT_QUAD_SCHEME = 'rk4'
 
 
 class OCPProblem:
@@ -33,7 +33,7 @@ class OCPProblem:
         x0: np.ndarray,
         u0=None,                           # 可选：控制初猜（见上面支持的形状）
         dyn=None,                          # dyn(x, u, theta=None) -> np.array(dtype=object)
-        integrator=None,                   # integrator(x, u, dt_k, f, accumulate_cb=None, t0=None, quad='rk4-mid')
+        integrator=None,                   # integrator(x, u, dt_k, f, accumulate_cb=None, t0=None, quad='rk4')
         nu: int,
         nx: int,
         objective_builder=None,            # 必填
@@ -78,27 +78,27 @@ class OCPProblem:
         self.path_eq_specs   = []  # 路径等式 h(t)=0 → ∫ h^2 dt = 0 或 ∫ smooth|h| dt = 0
         self.path_ineq_specs = []  # 路径不等式 h≤0 → ∫ L_eps(h) dt ≤ γ
 
-        # 子步积分采样模式。None = 未指定，由 objective_builder 自带的 quad 决定
-        # （见 resolve_quad_mode）；显式赋值则覆盖之，对目标与全部约束统一生效。
-        self.path_quad_mode = None
+        # 子步求积方案，取值见 ocp_integrators_utils.QUAD_SCHEMES。
+        # None = 未指定，由 objective_builder 自带的 quad 决定（见
+        # resolve_quad_scheme）；显式赋值则覆盖之，对目标与全部约束统一生效。
+        self.quad_scheme = None
 
     # ---------- 求积方案解析 ----------
-    def resolve_quad_mode(self) -> str:
+    def resolve_quad_scheme(self) -> str:
         """
         全局唯一的求积方案解析，目标与所有约束都必须经由此处取值，优先级：
-          1. problem.path_quad_mode（显式赋值）
+          1. problem.quad_scheme（显式赋值）
           2. make_builders(quad=...) 记在 objective_builder.quad 上的值
-          3. 包级默认 DEFAULT_QUAD
+          3. 包级默认 DEFAULT_QUAD_SCHEME
 
-        返回的是**规范名**（别名如 'rk4-mid' 会被归一到 'midpoint'），因此
-        下游可以直接按规范名比较。不认识的名字在此报错，而不是拖到积分器里。
+        不认识的名字在此报错，而不是拖到积分器里才发现。
         """
-        mode = getattr(self, "path_quad_mode", None)
-        if mode is None:
-            mode = getattr(self.objective_builder, "quad", None)
-        if mode is None:
-            mode = DEFAULT_QUAD
-        return resolve_quad_name(mode)
+        scheme = getattr(self, "quad_scheme", None)
+        if scheme is None:
+            scheme = getattr(self.objective_builder, "quad", None)
+        if scheme is None:
+            scheme = DEFAULT_QUAD_SCHEME
+        return validate_quad_scheme(scheme)
 
     # ---------- 规范化约束注册 API ----------
     def add_terminal_eq(self, psi):
@@ -201,7 +201,7 @@ class OCPProblem:
             )
         if self.has_params() and self.theta0 is None:
             print("[ADMISER] 提示：ntheta>0 但未提供 theta0，θ 初猜将全部取 0。")
-        self.resolve_quad_mode()
+        self.resolve_quad_scheme()
 
     # 供 AD tape 构建用：返回 a_double 初值
     def ad_initial_state(self, atheta):

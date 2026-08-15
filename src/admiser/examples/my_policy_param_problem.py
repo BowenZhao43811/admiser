@@ -74,6 +74,6 @@ problem = OCPProblem(
 )
 
 # 统一：子步积分采样模式
-problem.path_quad_mode = 'rk4'
+problem.quad_scheme = 'rk4'
 
 __all__ = ["problem", "N", "dt", "T"]

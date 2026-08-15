@@ -105,7 +105,7 @@ objective_builder= make_builders(
     dyn=dyn,
     L=L,
     Phi=Phi,
-    quad='rk4-mid',
+    quad='midpoint',
 )
 
 # ================= 6) 控制盒约束 =================
@@ -129,7 +129,7 @@ problem = OCPProblem(
     control_bounds_builder=control_bounds_builder,
     ntheta=0, theta0=None, param_bounds_builder=None,
 )
-problem.path_quad_mode = 'rk4-mid'  # 子步积分采样点
+problem.quad_scheme = 'midpoint'  # 2 阶求积，保持本例原有数值
 
 # ================= 8) 约束注册（canonical） =================
 # 8.1 路径不等式（转译）：N(t) - 0.75 K4 ≥ 0  <=>  0.75*K4 - N(t) ≤ 0

@@ -58,6 +58,6 @@ problem = OCPProblem(
 )
 
 # 采样位置（子步中点）
-problem.path_quad_mode = 'rk4'
+problem.quad_scheme = 'rk4'
 
 __all__ = ["problem", "N", "dt"]

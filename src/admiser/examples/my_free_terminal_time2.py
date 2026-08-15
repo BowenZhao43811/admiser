@@ -63,7 +63,7 @@ problem = OCPProblem(
     control_bounds_builder=control_bounds_builder,
     ntheta=0,
 )
-problem.path_quad_mode = 'rk4'
+problem.quad_scheme = 'rk4'
 
 # 终端等式：x1(T)=1.25, x2(T)=1.0 （x3 终端自由）
 def terminal_eq_psi(xT_ad, theta):

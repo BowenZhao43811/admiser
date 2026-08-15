@@ -33,9 +33,9 @@ def build_ad_tapes(Utheta_template, problem):
     nuN = problem.N * problem.nu
     has_params = problem.has_params()
 
-    # 目标与约束必须用同一套求积模式，否则 SLSQP 看到的目标与约束建立在
+    # 目标与约束必须用同一套求积方案，否则 SLSQP 看到的目标与约束建立在
     # 不同的离散化上，KKT 点没有意义。
-    quad_eff = problem.resolve_quad_mode()
+    scheme = problem.resolve_quad_scheme()
 
     # ---------- 目标 ----------
     az_obj = cppad_py.independent(Utheta_template)
@@ -96,7 +96,7 @@ def build_ad_tapes(Utheta_template, problem):
             x = problem.integrator(
                 x, uk, dt_k, f,
                 accumulate_cb=acc_cb, t0=t,
-                quad=quad_eff,
+                quad=scheme,
             )
             t = t + dt_k
 
@@ -171,7 +171,7 @@ def build_ad_tapes(Utheta_template, problem):
             x = problem.integrator(
                 x, uk, dt_k, f,
                 accumulate_cb=acc_cb, t0=t,
-                quad=quad_eff,
+                quad=scheme,
             )
             t = t + dt_k
 

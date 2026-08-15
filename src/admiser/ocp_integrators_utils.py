@@ -45,6 +45,9 @@ tape 的规模，因此高阶方案的开销是"tape 变大"而不是"多解一�
     'simpson'      3     3     (t,x), (t+h/2, x+¼h(k1+k2)), (t+h, x_end)
     'rk4'          4     4     RK4 的四个级点，权重 h/6,h/3,h/3,h/6
 
+QUAD_SCHEMES 是唯一的方案名来源，不设别名：方案名在全package范围内只有这一套
+写法，拼错或用了旧写法都会立即报错，而不是被静默接受成另一种精度。
+
 关于 'simpson' 的中点：取两个半步估计的平均 ½[(x+½h·k1)+(x+½h·k2)] = x+¼h(k1+k2)。
 这两个估计对真实中点的误差恰为 ∓⅛h²·f'f，相加时首阶误差相消，因而该平均点是
 O(h³) 精度，Simpson 整体达到 3 阶。若中点改用 x+½h·k1 或 x+½h·k2 中的任何单独
@@ -78,32 +81,19 @@ QUAD_SCHEMES = {
     'rk4':       QuadScheme(4, 4, "RK4 增广状态求积：四个级点，权重 h/6, h/3, h/3, h/6"),
 }
 
-#: 兼容旧问题文件的别名。'rk4-mid' 这个历史命名有误导性——它取的是欧拉半步
-#: x+½h·k1，只有 2 阶，与 RK4 的精度无关，仅仅是"用到了 k1"而已。新代码请写
-#: 'midpoint'；旧文件（如 examples/my_medical1.py）继续可用且行为逐位不变。
-QUAD_ALIASES = {
-    'mid':     'midpoint',
-    'rk4-mid': 'midpoint',
-}
-
-#: 所有可接受的写法（规范名 + 别名），供参数校验用。
-QUAD_MODES = tuple(QUAD_SCHEMES) + tuple(QUAD_ALIASES)
-
-
-def resolve_quad_name(name: str) -> str:
-    """把别名归一到规范方案名；不认识的名字直接报错。"""
-    canonical = QUAD_ALIASES.get(name, name)
-    if canonical not in QUAD_SCHEMES:
+def validate_quad_scheme(name: str) -> str:
+    """校验求积方案名并原样返回；不认识的名字直接报错。"""
+    if name not in QUAD_SCHEMES:
         raise ValueError(
-            f"unknown quad scheme {name!r}; expected one of {QUAD_MODES}. "
+            f"unknown quad scheme {name!r}; expected one of {tuple(QUAD_SCHEMES)}. "
             "（方案名拼错会导致积分项被静默跳过，因此这里直接报错。）"
         )
-    return canonical
+    return name
 
 
 def quad_order(name: str) -> int:
     """该求积方案的全局收敛阶。"""
-    return QUAD_SCHEMES[resolve_quad_name(name)].order
+    return QUAD_SCHEMES[validate_quad_scheme(name)].order
 
 
 def _shift(t, delta):
@@ -192,7 +182,7 @@ def rk4_substeps(x, u, dt, f, m_sub=5, accumulate_cb=None, t0=None, quad='rk4'):
     t0 : float | a_double | None
         本段起点时间。为 None 时回调收到的 t_i 也是 None（被积函数不依赖 t 时可用）
     quad : str
-        求积方案名，见 QUAD_SCHEMES / QUAD_ALIASES。默认 'rk4'（4 阶，与状态同阶）
+        求积方案名，见 QUAD_SCHEMES。默认 'rk4'（4 阶，与状态同阶）
 
     返回
     ----
@@ -203,7 +193,7 @@ def rk4_substeps(x, u, dt, f, m_sub=5, accumulate_cb=None, t0=None, quad='rk4'):
     无论选哪个求积方案，状态都由完整的 RK4 推进，因此**段末状态与 quad 无关**；
     quad 只影响 ∫ 的精度。各方案都只复用 k1..k4，不额外求值 f。
     """
-    scheme = resolve_quad_name(quad)
+    scheme = validate_quad_scheme(quad)
 
     h = dt / m_sub
     t = t0

@@ -11,7 +11,7 @@ import numpy as np
 import cppad_py
 import inspect
 
-from .ocp_problem_builders import DEFAULT_QUAD
+from .ocp_problem_builders import DEFAULT_QUAD_SCHEME
 
 
 def _bind_dyn_with_theta_ad(dyn, atheta):
@@ -29,7 +29,7 @@ def make_builders(
     # 以下两个参数保留以兼容旧调用，但不会再用于构造约束：
     terminal_eq=None,
     integral_eqs=None,
-    quad: str = DEFAULT_QUAD,
+    quad: str = DEFAULT_QUAD_SCHEME,
 ):
     """
     返回：
@@ -37,7 +37,7 @@ def make_builders(
 
     quad 为本目标函数默认的子步求积方案（可选值与各自的阶数见
     ocp_integrators_utils.QUAD_SCHEMES）；若问题对象显式设置了
-    problem.path_quad_mode，则以后者为准——目标与所有约束必须共用同一方案，
+    problem.quad_scheme，则以后者为准——目标与所有约束必须共用同一方案，
     否则 SLSQP 看到的目标与约束建立在不同离散化上，KKT 点没有意义。
     """
 
@@ -65,7 +65,7 @@ def make_builders(
             Lval = L(_t, x_sub, u_sub, atheta)
             J    = J + w_ad * Lval
 
-        quad_eff = problem.resolve_quad_mode()
+        scheme = problem.resolve_quad_scheme()
 
         # rollout with accumulation
         for k in range(N):
@@ -77,7 +77,7 @@ def make_builders(
             x = problem.integrator(
                 x, uk, dt_k, f,
                 accumulate_cb=acc_cb, t0=t,
-                quad=quad_eff,
+                quad=scheme,
             )
             t = t + dt_k
 
@@ -89,7 +89,7 @@ def make_builders(
 
         return np.array([J], dtype=object)
 
-    # 把 quad 挂在函数上，供 OCPProblem.resolve_quad_mode 读取，使目标与约束
-    # tape 共用同一模式（早期版本里这个参数被 path_quad_mode 无条件覆盖而失效）。
+    # 把 quad 挂在函数上，供 OCPProblem.resolve_quad_scheme 读取，使目标与约束
+    # tape 共用同一方案（早期版本里这个参数被 quad_scheme 无条件覆盖而失效）。
     objective_builder.quad = quad
     return objective_builder

@@ -96,7 +96,7 @@ problem = OCPProblem(
     x0_from_theta_ad=x0_from_theta_ad if ntheta > 0 else None,
     x0_from_theta_numeric=x0_from_theta_numeric if ntheta > 0 else None,
 )
-problem.path_quad_mode = 'rk4'
+problem.quad_scheme = 'rk4'
 
 # ============= 9) 约束注册 =============
 # ⚠️ 下面六类是一份"菜单"，彼此**不是**同时可行的（例如 9.1 要求 x1(T)=1，

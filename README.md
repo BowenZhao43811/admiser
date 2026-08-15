@@ -242,15 +242,17 @@ for h in res["continuation"]:
 
 The **state** is always advanced by full RK4. The integrals along that trajectory — the objective $\int L\,dt$, every integral constraint, and every transcribed path constraint — are accumulated by a separately chosen **quadrature scheme**, and its order is *not* automatically the same as the integrator's.
 
-Set it with `make_builders(quad=...)`, or globally with `problem.path_quad_mode` (which takes precedence, and applies to the objective **and** every constraint — they must share one scheme, or the KKT point is meaningless).
+Set it with `make_builders(quad=...)`, or globally with `problem.quad_scheme` (which takes precedence, and applies to the objective **and** every constraint — they must share one scheme, or the KKT point is meaningless).
 
 | `quad` | order | `n_eval` | sampling |
 |---|---|---|---|
 | `'rk4'` *(default)* | **4** | 4 | the four RK4 stage points, weights $h/6, h/3, h/3, h/6$ |
 | `'simpson'` | 3 | 3 | Simpson with midpoint $x + \tfrac{h}{4}(k_1+k_2)$ |
-| `'midpoint'` (aliases `'mid'`, `'rk4-mid'`) | 2 | 1 | Euler half-step midpoint $x + \tfrac{h}{2}k_1$ |
+| `'midpoint'` | 2 | 1 | Euler half-step midpoint $x + \tfrac{h}{2}k_1$ |
 | `'trapezoid'` | 2 | 2 | both endpoints, weights $h/2, h/2$ |
 | `'left'` / `'right'` | 1 | 1 | substep left / right endpoint |
+
+`QUAD_SCHEMES` is the single source of scheme names — there are no aliases. A misspelled or outdated name raises immediately rather than being silently accepted as a different accuracy.
 
 Every scheme reuses the $k_1..k_4$ that RK4 already computed, so **none of them cost extra evaluations of `dyn`**. `n_eval` is the number of *integrand* evaluations per substep — it is what drives AD tape size, so the price of a higher order is a bigger tape, not a second ODE solve.
 
@@ -275,9 +277,7 @@ A scheme's order is capped by **both** the quadrature rule and the accuracy of t
 
 `'rk4'` is exactly RK4 applied to the augmented state $\dot y = L(t,x,u,θ)$, which is why $\int L\,dt$ comes out as accurate as the trajectory.
 
-> ℹ️ `'rk4-mid'` is a **deprecated alias for `'midpoint'`**, kept so older problem files keep working unchanged. The name is misleading: it samples the Euler half-step $x+\tfrac{h}{2}k_1$ and is 2nd order — using $k_1$ does not confer RK4 accuracy. Write `'midpoint'` in new code.
-
-Programmatic access: `admiser.QUAD_SCHEMES` (name → order / `n_eval` / summary), `admiser.quad_order(name)`, `admiser.resolve_quad_name(name)`.
+Programmatic access: `admiser.QUAD_SCHEMES` (name → order / `n_eval` / summary), `admiser.quad_order(name)`, `admiser.validate_quad_scheme(name)`.
 
 ## Writing AD-safe Model Functions
 

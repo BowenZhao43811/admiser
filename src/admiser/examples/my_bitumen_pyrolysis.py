@@ -84,7 +84,7 @@ problem = OCPProblem(
     # theta0=...,
     # param_bounds_builder=...,
 )
-problem.path_quad_mode = 'rk4'
+problem.quad_scheme = 'rk4'
 
 # ================== 8) 在此统一注册约束（canonical constraints） ==================
 # 终端等式（如果需要 x(T)=xT）：

@@ -13,11 +13,11 @@ except ImportError as _exc:       # pragma: no cover - 取决于用户环境
     raise ImportError(f"{_exc}\n\n{_CPPAD_HINT}") from _exc
 
 # Directly exposed common APIs
-from .ocp_problem_builders import OCPProblem, DEFAULT_QUAD
+from .ocp_problem_builders import OCPProblem, DEFAULT_QUAD_SCHEME
 from .ocp_solver_builders import OCPSolver
 from .ocp_integrators_utils import (
     rk4_substeps, rk4_step,
-    QUAD_SCHEMES, QUAD_ALIASES, QUAD_MODES, quad_order, resolve_quad_name,
+    QuadScheme, QUAD_SCHEMES, quad_order, validate_quad_scheme,
 )
 from .ocp_function_builders import make_builders
 from .ocp_smooth_utils import L_eps, smooth_abs
@@ -26,8 +26,8 @@ __all__ = [
     "__version__",
     "OCPProblem", "OCPSolver", "make_builders",
     "rk4_substeps", "rk4_step",
-    "QUAD_SCHEMES", "QUAD_ALIASES", "QUAD_MODES", "DEFAULT_QUAD",
-    "quad_order", "resolve_quad_name",
+    "QuadScheme", "QUAD_SCHEMES", "DEFAULT_QUAD_SCHEME",
+    "quad_order", "validate_quad_scheme",
     "L_eps", "smooth_abs",
     "ensure_cppad_or_warn",
 ]

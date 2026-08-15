@@ -72,7 +72,7 @@ problem = OCPProblem(
     x0_from_theta_ad=x0_from_theta_ad,
     x0_from_theta_numeric=x0_from_theta_numeric,
 )
-problem.path_quad_mode = 'rk4'
+problem.quad_scheme = 'rk4'
 
 # 终端等式：x(T) = θ
 def terminal_eq_psi(xT_ad, atheta):

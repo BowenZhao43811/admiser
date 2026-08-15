@@ -81,7 +81,7 @@ problem = OCPProblem(
     control_bounds_builder=control_bounds_builder,
     ntheta=0, theta0=None, param_bounds_builder=None,
 )
-problem.path_quad_mode = 'rk4'
+problem.quad_scheme = 'rk4'
 
 # ====== 注册约束（canonical API）======
 # 1) 路径不等式：I(t) ≤ I_cap  →  h = I - I_cap ≤ 0 → ∫ L_eps(h) dt ≤ γ
