@@ -1,29 +1,30 @@
-# my_ocp_problem_tpl.py
-# 通用 OCP 问题定义模板（新接口：目标与约束解耦；约束统一 canonical 注册）
+# my_A_problem_temeplate.py
+# General OCP problem template: the objective and the constraints are decoupled,
+# and all constraints are registered in canonical form.
 import numpy as np
 from functools import partial
 
 from admiser import OCPProblem
 from admiser import rk4_substeps
-from admiser import make_builders   # 仅构建 objective_builder
+from admiser import make_builders   # builds the objective_builder only
 
-# ============= 1) 网格与维度 =============
+# ============= 1) grid and dimensions =============
 T  = 1.0
 N  = 100
 dt = T / N
 nx = 2
 nu = 1
 
-# ============= 2) 初值/（可选）目标终端值 =============
+# ============= 2) initial state / optional terminal target =============
 x0 = np.zeros(nx, dtype=float)
-u0 = None  # 控制初猜；若无特殊要求可设为 None
-# 若需要 x(T)=xT 的等式约束，会在下面用 problem.add_terminal_eq(...) 注册
+u0 = None  # control initial guess; None is fine if you have no preference
+# A terminal equality x(T) = xT is registered with problem.add_terminal_eq(...) below.
 xT = None
 
-# ============= 3) 动力学（必须支持 theta 可为 None） =============
+# ============= 3) dynamics (must tolerate theta=None) =============
 def dyn(x, u, theta=None):
     """
-    示例：
+    Example:
       x = [x1, x2], u = [u1]
       x1' = x2
       x2' = -x1 + u1
@@ -34,28 +35,26 @@ def dyn(x, u, theta=None):
     dx2 = -x1 + u1
     return np.array([dx1, dx2], dtype=object)
 
-# ============= 4) 目标函数片段（L 与 Phi） =============
+# ============= 4) objective pieces (L and Phi) =============
 def L(t, x, u, theta):
-    """示例：L = x1^2 + x2^2 + 1e-3 * u^2"""
+    """Example: L = x1^2 + x2^2 + 1e-3 * u^2"""
     return x[0]*x[0] + x[1]*x[1] + 1e-3 * (u[0]*u[0])
 
 def Phi(xT_ad, theta):
-    """无终端代价则返回 None；示例保留 None"""
+    """Return None when there is no terminal cost; this example has none."""
     return None
 
-# 仅构建“目标” builder；约束统一用 add_* 注册
+# Only the objective builder; constraints go through the add_* API.
 objective_builder = make_builders(
     dyn=dyn,
-    L=L,           # 可为 None
-    Phi=Phi,       # 可为 None
-    quad='rk4'     # 子步求积方案：1~4 阶可选，见 admiser.QUAD_SCHEMES
+    L=L,           # may be None
+    Phi=Phi,       # may be None
+    quad='rk4'     # substep quadrature scheme, orders 1 to 4; see admiser.QUAD_SCHEMES
 )
 
-# ============= 5) 可选：初值依赖 θ（x0 = x0(θ)） =============
+# ============= 5) optional: theta-dependent initial state x0 = x0(theta) =============
 def x0_from_theta_ad(atheta, problem):
-    """
-    示例：x0 = [θ1, 0]；若无参数优化，可不传
-    """
+    """Example: x0 = [theta1, 0]. Omit both hooks if you do not optimise parameters."""
     if atheta is None:
         return np.array([0.0, 0.0], dtype=object)
     return np.array([atheta[0], 0.0], dtype=object)
@@ -65,25 +64,25 @@ def x0_from_theta_numeric(theta, problem):
         return x0.copy()
     return np.array([float(theta[0]), 0.0], dtype=float)
 
-# ============= 6) 控制盒约束 =============
+# ============= 6) control box bounds =============
 def control_bounds_builder(problem: OCPProblem):
-    """示例：|u1| <= 10"""
+    """Example: |u1| <= 10"""
     return [(-10.0, 10.0)] * (problem.N * problem.nu)
 
-# ============= 7) 系统参数 θ（可选） =============
+# ============= 7) optional system parameters theta =============
 ntheta = 0
 theta0 = None
 
 def param_bounds_builder(problem: OCPProblem):
-    """若 ntheta>0，返回与 θ 维度匹配的盒约束列表。示例：θ1 ∈ [0, 1]"""
+    """When ntheta > 0, return one box bound per parameter. Example: theta1 in [0, 1]."""
     return [(0.0, 1.0)]
 
-# ============= 8) 组装 Problem =============
+# ============= 8) assemble the problem =============
 substepped_rk4 = partial(rk4_substeps, m_sub=10)
 
 problem = OCPProblem(
     N=N, dt=dt,
-    x0=x0,                         # 若 x0 依赖 θ，会在 AD/数值路径中被覆盖
+    x0=x0,                         # overridden by the hooks below if x0 depends on theta
     u0=u0,
     dyn=dyn,
     integrator=substepped_rk4,
@@ -98,50 +97,58 @@ problem = OCPProblem(
 )
 problem.quad_scheme = 'rk4'
 
-# ============= 9) 约束注册 =============
-# ⚠️ 下面六类是一份"菜单"，彼此**不是**同时可行的（例如 9.1 要求 x1(T)=1，
-#    而 9.6 要求 x1(T)≤0.5）。本模板默认只启用 9.1 + 9.4 + 9.5 这一组自洽的
-#    约束，其余以注释形式保留写法。按你自己的问题取用，别一次全打开。
+# ============= 9) register the constraints =============
+# WARNING: the six kinds below are a MENU, and they are not mutually feasible
+# (9.1 demands x1(T) = 1 while 9.6 demands x1(T) <= 0.5). This template enables
+# only the self-consistent set 9.1 + 9.4 + 9.5; the rest are kept as comments.
+# Pick what your own problem needs -- do not switch them all on at once.
 
-# 9.1 终端等式：x(T) = xT
+# 9.1 terminal equality: x(T) = xT
 def terminal_eq_psi(xT_ad, atheta):
     xT_const = np.array([v for v in [1.0, 0.0]], dtype=object)
-    return xT_ad - xT_const   # 向量等式=0
+    return xT_ad - xT_const   # vector equality = 0
 problem.add_terminal_eq(terminal_eq_psi)
 
-# 9.2 积分等式：∫ q(t,x,u,θ) dt = target
+# 9.2 integral equality: int q(t, x, u, theta) dt = target
 # def q_int(t, x, u, th): return x[0]
 # problem.add_integral_eq(qfun=q_int, target=1.0)
 
-# 9.3 路径等式：h(t,x,u,θ) = 0
-# - L2 模式：∫ h^2 dt = 0（推荐）
-# - abs 模式：∫ smooth_abs_eps(h) dt = 0，eps_abs 会被 solve_transcription 一并收缩
+# 9.3 path equality: h(t, x, u, theta) = 0
+# - mode 'L2' : int h^2 dt = 0 (recommended)
+# - mode 'abs': int smooth_abs_eps(h) dt = 0; eps_abs shrinks along with eps
+#               during a continuation solve
 # def h_eq(t, x, u, th): return x[1]
 # problem.add_path_eq(hfun=h_eq, mode="L2", eps_abs=1e-6)
 
-# 9.4 积分不等式：∫ q dt ≤/≥ bound
-def q_budget(t, x, u, th): return u[0]*u[0]   # 示例：控制能量预算
+# 9.4 integral inequality: int q dt <=/>= bound
+def q_budget(t, x, u, th): return u[0]*u[0]   # example: a control-energy budget
 problem.add_integral_ineq(qfun=q_budget, bound=50.0, sense="<=")
 
-# 9.5 路径不等式（约束转译）：h(t,x,u,θ) ≤ 0  →  ∫ L_eps(h) dt ≤ γ
-# gamma 省略即按 γ = T·ε/4 自动取值（与 ε 相容的取法，见 OCPProblem.auto_gamma）。
-# 切勿写 gamma=0.0：那等价于强制 h(t) ≤ -ε（严格内点），既保守又难收敛。
-# ε 是**有量纲**的，要按 h 自身的量级取；不确定时用 solve_transcription 从大到小续贯。
-def h_ineq(t, x, u, th): return x[1] - 3.0   # 示例：|x2| 不超过 3
+# 9.5 path inequality (constraint transcription): h(t,x,u,theta) <= 0
+#     -> int L_eps(h) dt <= gamma
+# Omitting gamma gives the value consistent with eps, gamma = T*eps/4
+# (see OCPProblem.auto_gamma).
+# Never write gamma=0.0: that forces h(t) <= -eps, a strictly interior solution
+# that is both conservative and hard to converge.
+# eps CARRIES UNITS -- scale it to the magnitude of your own h. When unsure, let
+# a continuation solve walk it down from a large value (section 10).
+def h_ineq(t, x, u, th): return x[1] - 3.0   # example: keep x2 below 3
 problem.add_path_ineq(hfun=h_ineq, eps=1e-2)
 
-# 9.6 终端不等式：φ(xT,θ) ≤ 0 或 ≥ 0
+# 9.6 terminal inequality: phi(xT, theta) <= 0 or >= 0
 # def phi_T(xT_ad, th): return xT_ad[0] - 0.5
 # problem.add_terminal_ineq(phi=phi_T, sense="<=")
 
-# ============= 10) 求解模式（写在问题里，求解端只管调 solve()）=============
-# mode="single"（默认，可不写这一句）
-#     用上面 add_path_ineq 登记的 ε/γ 直接解一次。
+# ============= 10) solve mode (declared here; the driver just calls solve()) =============
+# mode="single" (the default -- omit this call entirely to get it)
+#     Solve once with the eps/gamma registered by add_path_ineq above.
 # mode="continuation"
-#     ε→0 续贯：登记的 ε 视为**终点**，实际从 ε/shrink^(n_rounds-1) 起逐轮收缩，
-#     每轮用上一轮的解热启动。ε 大时光滑好解但约束松，ε 小时逼近真实约束但趋近
-#     不可微，续贯兼顾两者。下例 ε 依次取 1e1 → 1e0 → 1e-1 → 1e-2。
+#     eps -> 0 continuation: the registered eps is the FINAL value, and the rounds
+#     start from eps/shrink^(n_rounds-1) and shrink each round, warm-starting from
+#     the previous solution. A large eps is smooth and easy but loose; a small eps
+#     approaches the true constraint but also a nondifferentiable hinge, so walking
+#     it down gets both. Below, eps runs 1e1 -> 1e0 -> 1e-1 -> 1e-2.
 problem.set_transcription(mode="continuation", n_rounds=4, shrink=0.1)
 
-# ============= 11) 模板导出 =============
-__all__ = ["problem", "N", "dt"]
+# ============= 11) exports =============
+__all__ = ["problem", "N", "dt", "T"]

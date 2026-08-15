@@ -1,4 +1,4 @@
-# ocp_problem.py
+# ocp_problem_builders.py
 from contextlib import contextmanager
 
 import numpy as np
@@ -6,25 +6,31 @@ import cppad_py
 
 from .ocp_integrators_utils import validate_quad_scheme
 
-#: 包级默认求积方案：与状态同为 4 阶，且不增加动力学求值次数
+#: Package-wide default quadrature scheme: 4th order, matching the state
+#: integrator, and costing no extra dynamics evaluations.
 DEFAULT_QUAD_SCHEME = 'rk4'
 
 
 class OCPProblem:
     """
-    统一的 OCP 问题容器。
-    - 目标函数由 objective_builder(U[a_double], theta[a_double], problem) 构建
-    - 约束通过 add_* 接口注册（canonical 形式）并由 tapes 统一构建：
-        等式:  G(z) = 0
-        不等式: C(z) >= 0
-    - 动力学与积分由 integrator 处理（需支持 accumulate_cb, t0, quad）
-    - 控制初猜 u0：支持多种形状并自动展开为长度 N*nu 的向量
-        * 标量：同一值用于所有步与所有控制分量
-        * (nu,)：每步相同的控制向量
-        * (N,)：仅当 nu==1 时有效（每步一个标量控制）
-        * (N, nu)：逐步控制矩阵
-        * (N*nu,)：已扁平向量
-      若未提供 u0，则优先用控制盒约束的“中点”作为初猜；无界处取 0。
+    Unified container for an optimal control problem.
+
+    - The objective is built by objective_builder(U[a_double], theta[a_double], problem).
+    - Constraints are registered through the add_* API in canonical form and
+      assembled into AD tapes together:
+        equality  : G(z) = 0
+        inequality: C(z) >= 0
+    - Dynamics and integration are handled by `integrator`, which must accept
+      accumulate_cb, t0 and quad.
+    - Control initial guess u0 accepts several shapes and is expanded to a flat
+      vector of length N*nu:
+        * scalar : one value for every step and every control component
+        * (nu,)  : the same control vector at every step
+        * (N,)   : only valid when nu == 1 (one scalar control per step)
+        * (N, nu): per-step control matrix
+        * (N*nu,): already flat
+      If u0 is not given, the midpoint of the control box bounds is used;
+      unbounded components fall back to 0.
     """
 
     def __init__(
@@ -33,19 +39,19 @@ class OCPProblem:
         N: int,
         dt: float,
         x0: np.ndarray,
-        u0=None,                           # 可选：控制初猜（见上面支持的形状）
+        u0=None,                           # optional control initial guess (shapes above)
         dyn=None,                          # dyn(x, u, theta=None) -> np.array(dtype=object)
         integrator=None,                   # integrator(x, u, dt_k, f, accumulate_cb=None, t0=None, quad='rk4')
         nu: int,
         nx: int,
-        objective_builder=None,            # 必填
-        constraint_builder=None,           # 兼容旧接口：可为 None（新架构建议不用）
+        objective_builder=None,            # required
+        constraint_builder=None,           # legacy interface, may be None (not recommended)
         control_bounds_builder=None,       # -> list[(low, high)] of length N*nu
         ntheta: int = 0,
         theta0: np.ndarray | None = None,
-        param_bounds_builder=None,         # -> list[(low, high)] length ntheta
-        x0_from_theta_ad=None,             # 可选：初值依赖 theta 的 a_double 版本
-        x0_from_theta_numeric=None,        # 可选：数值版
+        param_bounds_builder=None,         # -> list[(low, high)] of length ntheta
+        x0_from_theta_ad=None,             # optional: a_double version of x0(theta)
+        x0_from_theta_numeric=None,        # optional: numeric version of x0(theta)
     ):
         self.N  = int(N)
         self.dt = float(dt)
@@ -59,7 +65,7 @@ class OCPProblem:
         self.integrator = integrator
 
         self.objective_builder  = objective_builder
-        # 旧接口保留以兼容历史代码；建议使用 add_* 系列注册约束
+        # Legacy hook kept for backwards compatibility; prefer the add_* API.
         self.constraint_builder = constraint_builder
 
         self.control_bounds_builder = control_bounds_builder
@@ -68,63 +74,75 @@ class OCPProblem:
         self.theta0 = None if theta0 is None else np.asarray(theta0, dtype=float)
         self.param_bounds_builder = param_bounds_builder
 
-        # 初值依赖 theta（可选）
+        # Optional theta-dependent initial state
         self._x0_from_theta_ad      = x0_from_theta_ad
         self._x0_from_theta_numeric = x0_from_theta_numeric
 
-        # 统一的规范化约束注册表
-        self.term_eq_specs   = []  # ψ_i(xT,θ) = 0
-        self.term_ineq_specs = []  # φ_i(xT,θ) ≤ 0 / ≥ 0
-        self.int_eq_specs    = []  # ∫ q_i dt  = b_i
-        self.int_ineq_specs  = []  # ∫ q_i dt ≤/≥ b_i
-        self.path_eq_specs   = []  # 路径等式 h(t)=0 → ∫ h^2 dt = 0 或 ∫ smooth|h| dt = 0
-        self.path_ineq_specs = []  # 路径不等式 h≤0 → ∫ L_eps(h) dt ≤ γ
+        # Canonical constraint registries
+        self.term_eq_specs   = []  # psi_i(xT, theta) = 0
+        self.term_ineq_specs = []  # phi_i(xT, theta) <= 0 / >= 0
+        self.int_eq_specs    = []  # int q_i dt  = b_i
+        self.int_ineq_specs  = []  # int q_i dt <=/>= b_i
+        self.path_eq_specs   = []  # path equality h(t)=0 -> int h^2 dt = 0, or int smooth|h| dt = 0
+        self.path_ineq_specs = []  # path inequality h<=0 -> int L_eps(h) dt <= gamma
 
-        # 子步求积方案，取值见 ocp_integrators_utils.QUAD_SCHEMES。
-        # None = 未指定，由 objective_builder 自带的 quad 决定（见
-        # resolve_quad_scheme）；显式赋值则覆盖之，对目标与全部约束统一生效。
+        # Substep quadrature scheme; see ocp_integrators_utils.QUAD_SCHEMES.
+        # None means "unspecified", in which case the quad carried by
+        # objective_builder decides (see resolve_quad_scheme). Setting it
+        # explicitly overrides that and applies to the objective and all
+        # constraints alike.
         self.quad_scheme = None
 
-        # 路径约束转译的求解策略，用 set_transcription() 声明
+        # Solve strategy for the path-constraint transcription; see set_transcription().
         self.transcription = dict(mode="single", n_rounds=1, shrink=0.1)
 
-        # ε 的临时调整，仅在求解过程中由 OCPSolver 借助 scaled_eps() 短暂设置，
-        # 结束后必定恢复。登记在 spec["eps"] 里的值永远保持用户写的那个。
+        # Transient epsilon adjustment. Only set briefly by OCPSolver through
+        # scaled_eps() and always restored afterwards, so the value registered
+        # in spec["eps"] always stays exactly what the user wrote.
         self._eps_factor = 1.0
         self._eps_override = None
 
-    # ---------- 转译策略 ----------
+    # ---------- transcription strategy ----------
     def set_transcription(self, mode: str = "single", n_rounds: int = 4,
                           shrink: float = 0.1) -> "OCPProblem":
         """
-        声明路径不等式转译的求解策略。写在问题定义里，求解端不必再关心。
+        Declare how the path-inequality transcription should be solved. This
+        belongs to the problem definition, so the solving side never has to
+        branch on it.
 
-        mode="single"（默认）
-            直接用 add_path_ineq 登记的 ε/γ 解一次。
+        mode="single" (default)
+            Solve once with the eps/gamma registered by add_path_ineq.
 
         mode="continuation"
-            ε→0 续贯求解。add_path_ineq 登记的 ε 视为**终点**，实际按几何序列
-                ε/shrink^(n_rounds-1), ..., ε/shrink, ε
-            逐轮求解，每轮用上一轮的解热启动，最后一轮正好落在登记值上。
-            γ 若登记为自动（add_path_ineq 未显式给 gamma），每轮按 T·ε/4 同步更新。
+            Solve by an eps -> 0 continuation. The eps registered with
+            add_path_ineq is treated as the FINAL value; the rounds actually run
+                eps/shrink^(n_rounds-1), ..., eps/shrink, eps
+            each warm-started from the previous round's solution, so the last
+            round lands exactly on the registered value. For constraints whose
+            gamma was left automatic (add_path_ineq called without gamma), gamma
+            is re-derived as T*eps/4 every round.
 
-            起点用**收缩比例**而不是绝对值给定：ε 带有各自 h 的量纲，多条路径
-            约束不能共用一个绝对起点，但共用一个比例是合理的。
+            The starting point is given as a shrink RATIO rather than an absolute
+            value: eps carries the units of its own h, so several path constraints
+            cannot share one absolute start, but they can share a ratio.
 
-        为什么要续贯：ε 大时 L_ε 光滑、好解但约束松；ε 小时逼近真实约束但趋近
-        不可微的折线，冷启动容易在边界卡死。从大到小逐步逼近兼顾两者。
+        Why continuation: with a large eps, L_eps is smooth and easy to solve but
+        the constraint is loose; with a small eps it approaches the true
+        constraint but also approaches a nondifferentiable hinge, where a cold
+        start easily stalls on the boundary. Shrinking gradually gets both.
         """
         if mode not in ("single", "continuation"):
-            raise ValueError(f"mode 必须是 'single' 或 'continuation'，收到 {mode!r}")
+            raise ValueError(f"mode must be 'single' or 'continuation', got {mode!r}")
         if mode == "continuation":
             if int(n_rounds) < 1:
-                raise ValueError(f"n_rounds 必须 ≥ 1，收到 {n_rounds}")
+                raise ValueError(f"n_rounds must be >= 1, got {n_rounds}")
             if not (0.0 < float(shrink) < 1.0):
-                raise ValueError(f"shrink 必须在 (0,1) 内，收到 {shrink}")
+                raise ValueError(f"shrink must lie in (0, 1), got {shrink}")
             if not self.path_ineq_specs:
                 raise ValueError(
-                    "问题里没有登记任何路径不等式（add_path_ineq），无需续贯求解；"
-                    "请用 set_transcription(mode='single') 或直接不调用本方法。"
+                    "No path inequality is registered (add_path_ineq), so there is "
+                    "nothing to continue on; use set_transcription(mode='single') "
+                    "or simply do not call this method."
                 )
         self.transcription = dict(mode=mode,
                                   n_rounds=1 if mode == "single" else int(n_rounds),
@@ -133,9 +151,12 @@ class OCPProblem:
 
     def eps_factors(self) -> list:
         """
-        每一轮相对于登记 ε 的倍数，**从大到小**，最后一个恒为 1.0（即登记值本身）。
-        single 模式返回 [1.0]；continuation 返回 [(1/s)^(n-1), ..., 1/s, 1.0]。
-        例：n_rounds=4, shrink=0.1, 登记 ε=1e-4 -> ε 依次取 1e-1, 1e-2, 1e-3, 1e-4。
+        Multipliers applied to the registered eps, one per round, in DESCENDING
+        order; the last one is always 1.0 (the registered value itself).
+
+        "single" returns [1.0]; "continuation" returns [(1/s)^(n-1), ..., 1/s, 1.0].
+        Example: n_rounds=4, shrink=0.1, registered eps=1e-4 -> the rounds use
+        eps = 1e-1, 1e-2, 1e-3, 1e-4.
         """
         cfg = self.transcription
         if cfg["mode"] == "single":
@@ -146,9 +167,11 @@ class OCPProblem:
     @contextmanager
     def scaled_eps(self, factor: float = 1.0, override: float | None = None):
         """
-        在 with 块内临时改变各路径约束的有效 ε：override 优先（绝对值），
-        否则按 factor 缩放登记值。退出时无条件恢复，因此 spec["eps"] 永不被改动，
-        同一个 problem 可以被反复求解而不会越跑越偏。
+        Temporarily change the effective eps of every path constraint inside the
+        with-block: `override` wins (absolute value), otherwise the registered
+        value is scaled by `factor`. The previous state is always restored on
+        exit, so spec["eps"] is never mutated and the same problem can be solved
+        repeatedly without drifting.
         """
         old = (self._eps_factor, self._eps_override)
         self._eps_factor = float(factor)
@@ -159,26 +182,30 @@ class OCPProblem:
             self._eps_factor, self._eps_override = old
 
     def effective_eps(self, spec: dict) -> float:
-        """该路径约束此刻实际生效的 ε。"""
+        """The eps currently in effect for this path constraint."""
         if self._eps_override is not None:
             return self._eps_override
         return float(spec["eps"]) * self._eps_factor
 
     def effective_gamma(self, spec: dict) -> float:
-        """该路径约束此刻实际生效的 γ：登记为自动的跟随 ε，显式给定的保持不变。"""
+        """
+        The gamma currently in effect: automatic ones follow eps, explicitly
+        given ones stay fixed.
+        """
         if spec.get("gamma_auto", False):
             return self.auto_gamma(self.effective_eps(spec))
         return float(spec["gamma"])
 
-    # ---------- 求积方案解析 ----------
+    # ---------- quadrature scheme resolution ----------
     def resolve_quad_scheme(self) -> str:
         """
-        全局唯一的求积方案解析，目标与所有约束都必须经由此处取值，优先级：
-          1. problem.quad_scheme（显式赋值）
-          2. make_builders(quad=...) 记在 objective_builder.quad 上的值
-          3. 包级默认 DEFAULT_QUAD_SCHEME
+        The single place where the quadrature scheme is resolved. The objective
+        and every constraint must go through it. Priority:
+          1. problem.quad_scheme (set explicitly)
+          2. the quad recorded on objective_builder by make_builders(quad=...)
+          3. the package default DEFAULT_QUAD_SCHEME
 
-        不认识的名字在此报错，而不是拖到积分器里才发现。
+        An unknown name raises here rather than deep inside the integrator.
         """
         scheme = getattr(self, "quad_scheme", None)
         if scheme is None:
@@ -187,47 +214,52 @@ class OCPProblem:
             scheme = DEFAULT_QUAD_SCHEME
         return validate_quad_scheme(scheme)
 
-    # ---------- 规范化约束注册 API ----------
+    # ---------- canonical constraint registration ----------
     def add_terminal_eq(self, psi):
-        """psi(xT, theta) -> a_double 或 a_double 向量"""
+        """psi(xT, theta) -> a_double, or a vector of a_double."""
         self.term_eq_specs.append(dict(psi=psi))
 
     def add_terminal_ineq(self, phi, sense: str = "<="):
-        """phi(xT, theta) <= 0 或 >= 0，sense in {'<=','>='}"""
+        """phi(xT, theta) <= 0 or >= 0; sense in {'<=', '>='}."""
         assert sense in ("<=", ">=")
         self.term_ineq_specs.append(dict(phi=phi, sense=sense))
 
     def add_integral_eq(self, qfun, target: float):
-        """∫ q dt = target；qfun(t,x,u,theta)->a_double"""
+        """int q dt = target, with qfun(t, x, u, theta) -> a_double."""
         self.int_eq_specs.append(dict(qfun=qfun, target=float(target)))
 
     def add_integral_ineq(self, qfun, bound: float, sense: str = "<="):
-        """∫ q dt ≤/≥ bound；sense in {'<=','>='}"""
+        """int q dt <=/>= bound; sense in {'<=', '>='}."""
         assert sense in ("<=", ">=")
         self.int_ineq_specs.append(dict(qfun=qfun, bound=float(bound), sense=sense))
 
     def auto_gamma(self, eps: float) -> float:
         """
-        约束转译中与 eps 相容的 γ 取法：γ = T·ε/4，T = N·dt。
+        The gamma that is consistent with a given eps in the constraint
+        transcription: gamma = T*eps/4, with T = N*dt.
 
-        依据：L_eps(h) - max(h,0) ∈ [0, ε/4]，在 h ≤ 0 上 L_eps(h) 的最大值恰为
-        L_eps(0) = ε/4。因此
-          * 任何真正满足 h(t) ≤ 0 的轨迹都满足 ∫L_eps dt ≤ T·ε/4 —— 转译后的问题
-            不会把原问题的可行解（包括最优解）排除在外；
-          * 反过来 ∫max(h,0) dt ≤ ∫L_eps dt ≤ γ = T·ε/4，即违反量的 L¹ 范数被
-            T·ε/4 控制，ε→0 时收敛到原约束。
-        取 γ=0 则强制 L_eps ≡ 0，等价于 h(t) ≤ -ε（严格内点），既过于保守又常常
-        让 SLSQP 在边界上失去下降方向。
+        Rationale: L_eps(h) - max(h, 0) lies in [0, eps/4], and on h <= 0 the
+        maximum of L_eps is attained exactly at L_eps(0) = eps/4. Therefore
+
+          * any trajectory that genuinely satisfies h(t) <= 0 also satisfies
+            int L_eps dt <= T*eps/4, so the transcribed problem does not exclude
+            the feasible set (including the optimum) of the original problem;
+          * conversely int max(h, 0) dt <= int L_eps dt <= gamma = T*eps/4, so the
+            L1 norm of the violation is bounded by T*eps/4 and vanishes as eps -> 0.
+
+        Taking gamma = 0 forces L_eps == 0, which is equivalent to h(t) <= -eps
+        (a strictly interior solution). That is both overly conservative and a
+        frequent cause of SLSQP losing its descent direction on the boundary.
         """
         return float(self.N * self.dt * float(eps) / 4.0)
 
     def add_path_ineq(self, hfun, eps: float, gamma: float | None = None):
         """
-        h(x,u,θ) ≤ 0  —>  ∫ L_eps(h) dt ≤ γ
+        h(x, u, theta) <= 0   -->   int L_eps(h) dt <= gamma
 
-        gamma=None（默认）表示按 auto_gamma(eps) = T·ε/4 自动取值，并在续贯
-        求解（OCPSolver.solve_transcription）收缩 ε 时随之更新；显式传入数值则
-        固定不变。
+        gamma=None (default) means gamma is taken automatically as
+        auto_gamma(eps) = T*eps/4, and is kept in sync whenever a continuation
+        solve shrinks eps. Passing an explicit number pins it instead.
         """
         auto = gamma is None
         self.path_ineq_specs.append(dict(
@@ -238,89 +270,101 @@ class OCPProblem:
 
     def add_path_eq(self, hfun, mode: str = "L2", eps_abs: float = 1e-6):
         """
-        路径等式 h(t)=0：
-        - mode='L2' : ∫ h^2 dt = 0（推荐）
-        - mode='abs': ∫ smooth_abs_eps(h) dt = 0
+        Path equality h(t) = 0:
+        - mode='L2' : int h^2 dt = 0 (recommended)
+        - mode='abs': int smooth_abs_eps(h) dt = 0
         """
         assert mode in ("L2", "abs")
         self.path_eq_specs.append(dict(hfun=hfun, mode=mode, eps_abs=float(eps_abs)))
 
-    # ---------- 基础工具 ----------
+    # ---------- basic utilities ----------
     def has_params(self) -> bool:
         return self.ntheta > 0
 
     def dt_of_segment(self, k: int):
         """
-        第 k 段的时长（a_double）。目标 tape 与约束 tape 必须都走这一个入口，
-        否则将来接入时间尺度变换（CPET）时两者会静默用上不同的时间网格。
-        子类/用户可实现 _current_dt(k) 返回 a_double 以支持变步长。
+        Duration of segment k, as an a_double. Both the objective tape and the
+        constraint tapes must go through this single entry point; otherwise a
+        future time-scaling transform (CPET) would silently give them different
+        time grids. Subclasses or users may implement _current_dt(k) returning an
+        a_double to support variable step sizes.
         """
         if callable(getattr(self, "_current_dt", None)):
             return self._current_dt(k)
         return cppad_py.a_double(self.dt)
 
     def validate(self) -> None:
-        """在录带前做一次结构检查，把 CppAD/SciPy 抛出的天书换成可读的报错。"""
+        """
+        Structural check run before taping, so that CppAD/SciPy internals are
+        never the first thing a user sees when something is misconfigured.
+        """
         if not callable(self.objective_builder):
             raise ValueError(
-                "OCPProblem.objective_builder 未设置。请用 make_builders(dyn=..., L=..., Phi=...) "
-                "生成后传给 OCPProblem(objective_builder=...)。"
+                "OCPProblem.objective_builder is not set. Build one with "
+                "make_builders(dyn=..., L=..., Phi=...) and pass it as "
+                "OCPProblem(objective_builder=...)."
             )
         if not callable(self.integrator):
-            raise ValueError("OCPProblem.integrator 未设置，例如 partial(rk4_substeps, m_sub=10)。")
+            raise ValueError(
+                "OCPProblem.integrator is not set, e.g. partial(rk4_substeps, m_sub=10)."
+            )
         if not callable(self.dyn):
-            raise ValueError("OCPProblem.dyn 未设置。")
+            raise ValueError("OCPProblem.dyn is not set.")
         if self.N <= 0 or self.dt <= 0:
-            raise ValueError(f"需要 N>0 且 dt>0，当前 N={self.N}, dt={self.dt}.")
+            raise ValueError(f"N > 0 and dt > 0 are required, got N={self.N}, dt={self.dt}.")
         if self.x0.shape != (self.nx,):
-            raise ValueError(f"x0 形状 {self.x0.shape} 与 nx={self.nx} 不符。")
+            raise ValueError(f"x0 has shape {self.x0.shape}, which does not match nx={self.nx}.")
 
         n_z = self.N * self.nu + (self.ntheta if self.has_params() else 0)
         bnds = self.make_bounds()
         if len(bnds) != n_z:
             raise ValueError(
-                f"盒约束个数 {len(bnds)} 与决策变量维数 {n_z} (=N*nu+ntheta) 不符；"
-                "请检查 control_bounds_builder / param_bounds_builder 的返回长度。"
+                f"Got {len(bnds)} box bounds but {n_z} decision variables (= N*nu + ntheta); "
+                "check the lengths returned by control_bounds_builder / param_bounds_builder."
             )
         if self.initial_guess().size != n_z:
             raise ValueError(
-                f"初猜维数 {self.initial_guess().size} 与决策变量维数 {n_z} 不符（检查 u0 / theta0）。"
+                f"Initial guess has size {self.initial_guess().size} but there are {n_z} "
+                "decision variables (check u0 / theta0)."
             )
         if self.has_params() and self.theta0 is None:
-            print("[ADMISER] 提示：ntheta>0 但未提供 theta0，θ 初猜将全部取 0。")
+            print("[ADMISER] Note: ntheta > 0 but no theta0 was given; theta starts at all zeros.")
         self.resolve_quad_scheme()
 
-    # 供 AD tape 构建用：返回 a_double 初值
+    # Initial state for AD taping: returns a_double values.
     def ad_initial_state(self, atheta):
         if callable(self._x0_from_theta_ad):
             return self._x0_from_theta_ad(atheta, self)
         return np.array([cppad_py.a_double(v) for v in self.x0], dtype=object)
 
-    # 供数值 rollout / 可视化用：返回 float 初值
-    # 触发条件必须与 ad_initial_state 完全一致（只看钩子是否可调用），否则
-    # X_opt 会和 tape 内部真正优化的那条轨迹对不上。钩子需自行处理 theta=None。
+    # Initial state for the numeric rollout / plotting: returns float values.
+    # The trigger condition must match ad_initial_state exactly (only whether the
+    # hook is callable); otherwise X_opt would not correspond to the trajectory
+    # that was actually optimised inside the tape. The hook must handle theta=None.
     def numeric_initial_state(self, theta=None):
         if callable(self._x0_from_theta_numeric):
             return self._x0_from_theta_numeric(theta, self)
         return self.x0.copy()
 
-    # ---------- 控制初猜展开 ----------
+    # ---------- control initial guess expansion ----------
     def _expand_u0(self) -> np.ndarray:
         """
-        把 self.u0 规范化成长度 N*nu 的扁平向量。
-        支持形状：
-          - 标量：同一个值填满所有步与分量
-          - (nu,)：每步都用同一控制向量
-          - (N,)：仅当 nu==1 有效，逐步给标量控制
-          - (N, nu)：逐步控制矩阵
-          - (N*nu,)：已扁平
-        若 self.u0 为空，则优先用 bounds 的中点；否则用 0。
+        Normalise self.u0 into a flat vector of length N*nu.
+
+        Supported shapes:
+          - scalar : one value fills every step and component
+          - (nu,)  : the same control vector at every step
+          - (N,)   : only valid when nu == 1, one scalar control per step
+          - (N, nu): per-step control matrix
+          - (N*nu,): already flat
+
+        If self.u0 is None, the midpoint of the box bounds is used, else zeros.
         """
         N, nu = self.N, self.nu
         if nu == 0:
             return np.empty(0, dtype=float)
 
-        # 未提供 u0：尝试用 box bounds 的中点
+        # No u0 given: try the midpoint of the box bounds.
         if self.u0 is None:
             bnds = None
             if callable(self.control_bounds_builder):
@@ -337,29 +381,29 @@ class OCPProblem:
                     if np.isfinite(lo) and np.isfinite(hi):
                         mids.append(0.5 * (lo + hi))
                     elif np.isfinite(lo) and not np.isfinite(hi):
-                        # 只有下界：取 max(lo, 0)
+                        # lower bound only: take max(lo, 0)
                         mids.append(max(lo, 0.0))
                     elif not np.isfinite(lo) and np.isfinite(hi):
-                        # 只有上界：取 min(hi, 0)
+                        # upper bound only: take min(hi, 0)
                         mids.append(min(hi, 0.0))
                     else:
-                        # 无界：取 0
+                        # unbounded: take 0
                         mids.append(0.0)
                 return np.asarray(mids, dtype=float)
 
-            # 没有 bounds 或不合法：回退全 0
+            # No usable bounds: fall back to all zeros.
             return np.zeros(N * nu, dtype=float)
 
-        # 提供了 u0：规范各种形状
+        # u0 given: normalise the accepted shapes.
         u0 = np.asarray(self.u0, dtype=float)
         if u0.ndim == 0:
-            # 标量
+            # scalar
             return np.full(N * nu, float(u0), dtype=float)
         if u0.shape == (nu,):
-            # 每步相同的控制向量
+            # same control vector at every step
             return np.tile(u0, N).astype(float)
         if u0.shape == (N,):
-            # 仅当 nu==1 合法
+            # only valid when nu == 1
             if nu != 1:
                 raise ValueError("u0 shape (N,) is only valid when nu == 1.")
             return u0.astype(float)
@@ -372,15 +416,15 @@ class OCPProblem:
             f"Unsupported u0 shape {u0.shape}; expected scalar, (nu,), (N,), (N,nu), or (N*nu,)."
         )
 
-    # ---------- 决策变量初猜（控制 + 参数） ----------
+    # ---------- decision-variable initial guess (controls + parameters) ----------
     def initial_guess(self) -> np.ndarray:
         z = []
 
-        # 控制初猜
+        # controls
         U0 = self._expand_u0()
         z.extend(U0.tolist())
 
-        # 参数初猜
+        # system parameters
         if self.has_params():
             if self.theta0 is None:
                 z.extend([0.0] * self.ntheta)
@@ -389,14 +433,14 @@ class OCPProblem:
 
         return np.asarray(z, dtype=float)
 
-    # ---------- 盒约束集合 ----------
+    # ---------- box bounds ----------
     def make_bounds(self):
         bounds = []
         if self.nu > 0:
             if callable(self.control_bounds_builder):
                 bounds.extend(self.control_bounds_builder(self))
             else:
-                # 默认无界
+                # unbounded by default
                 bounds.extend([(-np.inf, np.inf)] * (self.N * self.nu))
 
         if self.has_params():
@@ -407,7 +451,7 @@ class OCPProblem:
 
         return bounds
 
-    # ---------- 拆分决策向量 ----------
+    # ---------- split the decision vector ----------
     def split_decision(self, z):
         z = np.asarray(z, dtype=float)
         U = z[: self.N * self.nu]

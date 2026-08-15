@@ -1,4 +1,4 @@
-# ocp_solver.py
+# ocp_solver_builders.py
 
 import inspect
 
@@ -11,9 +11,11 @@ from .ocp_ADgradient_builders import optimize_fun_class
 
 def _bind_dyn_numeric(dyn, theta):
     """
-    把 dyn 统一成 f(x,u)（数值版闭包）。必须和 AD 侧的 _bind_dyn_with_theta_ad
-    用同样的规则识别 2 参数 / 3 参数签名，否则只支持 dyn(x,u) 的问题会在优化
-    全部跑完、复算轨迹时才抛 TypeError。
+    Wrap dyn into f(x, u) for the numeric path. It must detect 2-argument versus
+    3-argument signatures by exactly the same rule as _bind_dyn_with_theta_ad on
+    the AD side; otherwise a problem whose dyn only takes (x, u) would raise a
+    TypeError only after the whole optimisation has finished, while replaying the
+    trajectory.
     """
     n_params = len(inspect.signature(dyn).parameters)
     if n_params == 2:
@@ -23,31 +25,35 @@ def _bind_dyn_numeric(dyn, theta):
 
 class OCPSolver:
     """
-    通用 OCP 求解器。
+    General optimal control solver.
 
-    ------------- 对外只有两个方法 -------------
-    solve(...)   求解。单次还是 ε→0 续贯，由问题自己决定——在问题定义里用
-                 OCPProblem.set_transcription() 声明，求解端不必区分。
-    to_nlp(...)  只把 OCP 转录成 NLP（录 AD 带）并返回可求值/求梯度的对象，
-                 **不做优化**。用于检查梯度、与有限差分对比等。
+    ------------- only two public methods -------------
+    solve(...)   Solve. Whether that is a single solve or an eps -> 0 continuation
+                 is decided by the problem itself, declared with
+                 OCPProblem.set_transcription(); the solving side never branches on it.
+    to_nlp(...)  Only transcribe the OCP into an NLP (record the AD tape) and return
+                 an object that evaluates it and its derivatives -- NO optimisation.
+                 Useful for checking gradients, e.g. against finite differences.
 
-    ------------- 结果字典 -------------
-    scipy_result : 最后一轮的 SciPy 优化结果
-    U_opt        : ndarray (N*nu,)，最优控制
-    theta_opt    : ndarray (ntheta,)，最优系统参数（无则 None）
-    J_opt        : float，最优代价
-    t_opt        : ndarray (N+1,)，时间网格
-    X_opt        : ndarray (N+1, nx)，最优状态轨迹
-    eq_resid     : ndarray，等式约束残差 G(z)，应 ≈ 0（无则 None）
-    ineq_resid   : ndarray，不等式约束残差 C(z)，应 ≥ 0（无则 None）
-    path_viol    : ndarray，各路径不等式在网格上的 max h(t)，应 ≤ 0（无则 None）
-    history_cost : ndarray，最后一轮迭代过程中的代价变化
-    rounds       : list[dict]，每一轮的 (eps, gamma, J_opt, max_path_viol, status,
-                   nit)。single 模式下长度为 1，因此调用方不需要为两种模式写分支。
+    ------------- result dictionary -------------
+    scipy_result : the SciPy result of the final round
+    U_opt        : ndarray (N*nu,), optimal control
+    theta_opt    : ndarray (ntheta,), optimal system parameters (None if there are none)
+    J_opt        : float, optimal cost
+    t_opt        : ndarray (N+1,), time grid
+    X_opt        : ndarray (N+1, nx), optimal state trajectory
+    eq_resid     : ndarray, equality residual G(z), should be ~ 0 (None if there are none)
+    ineq_resid   : ndarray, inequality residual C(z), should be >= 0 (None if there are none)
+    path_viol    : ndarray, max h(t) on the grid for each path inequality, should be <= 0
+                   (None if there are none)
+    history_cost : ndarray, cost history of the final round's iterations
+    rounds       : list[dict], per round: eps, gamma, J_opt, max_path_viol, status, nit.
+                   Length 1 in "single" mode, so callers never need to branch on the mode.
 
-    ------------- 备注 -------------
-    - solve() 不会永久改动 problem：续贯过程中 ε 只是被临时缩放，结束后恢复，
-      因此同一个 problem 可以反复求解，结果一致。
+    ------------- notes -------------
+    - solve() never mutates the problem: eps is only scaled temporarily during a
+      round and restored afterwards, so the same problem can be solved repeatedly
+      with identical results.
     """
 
     def __init__(self, problem: object):
@@ -58,20 +64,23 @@ class OCPSolver:
         self.opt_fun = None
         self.history_cost = []
 
-    # ================= 对外接口 =================
+    # ================= public interface =================
 
     def solve(self, maxiter=5000, ftol=1e-8, disp=False, verbose=None, z0=None):
         """
-        求解。求解模式来自 problem.set_transcription()：
+        Solve the problem. The mode comes from problem.set_transcription():
 
-          mode="single"       ：用登记的 ε/γ 解一次
-          mode="continuation" ：ε 按几何序列从大到小逐轮求解，每轮热启动
+          mode="single"       : solve once with the registered eps/gamma
+          mode="continuation" : solve over a descending geometric eps schedule,
+                                warm-starting each round from the previous solution
 
-        参数
-        ----
-        maxiter, ftol, disp : 透传给每一轮的 SciPy SLSQP（disp 打印 SLSQP 自己的收敛信息）
-        verbose : 是否逐轮打印 ε/γ/J/违反量。None 表示"续贯模式下打印，单次模式下不打印"
-        z0      : 第一轮的初值，默认取 problem.initial_guess()
+        Parameters
+        ----------
+        maxiter, ftol, disp : forwarded to SciPy SLSQP for every round
+                              (disp prints SLSQP's own convergence report)
+        verbose : whether to print eps/gamma/J/violation per round. None means
+                  "print in continuation mode, stay quiet in single mode".
+        z0      : starting point for the first round; defaults to problem.initial_guess()
         """
         p = self.problem
         factors = p.eps_factors()
@@ -82,7 +91,8 @@ class OCPSolver:
         rounds, res = [], None
 
         for k, factor in enumerate(factors):
-            # ε 只在这个 with 块内被缩放，退出即恢复；spec["eps"] 始终是用户登记的值
+            # eps is scaled only inside this with-block and restored on exit, so
+            # spec["eps"] always keeps the value the user registered.
             with p.scaled_eps(factor=factor):
                 self._build_tapes()
                 res = self._solve_once(z, maxiter=maxiter, ftol=ftol, disp=disp)
@@ -97,8 +107,8 @@ class OCPSolver:
                                status=res["scipy_result"].status,
                                nit=res["scipy_result"].nit))
             if verbose:
-                e = f"{min(eps_now):.3e}" if eps_now else "—"
-                print(f"[ADMISER] 第 {k+1}/{len(factors)} 轮  eps={e}  "
+                e = f"{min(eps_now):.3e}" if eps_now else "-"
+                print(f"[ADMISER] round {k+1}/{len(factors)}  eps={e}  "
                       f"J={res['J_opt']:+.8g}  max h(t)={max_viol:+.3e}  "
                       f"status={res['scipy_result'].status}  nit={res['scipy_result'].nit}")
 
@@ -107,16 +117,20 @@ class OCPSolver:
 
     def to_nlp(self, eps=None):
         """
-        只把 OCP 转录成 NLP 并返回可求值/求梯度的对象，不做优化。
+        Transcribe the OCP into an NLP and return an object that evaluates it --
+        without running any optimisation.
 
-        暴露 objective_fun / objective_grad / eq_fun / eq_jac / ineq_fun / ineq_jac，
-        典型用途是拿 AD 梯度和有限差分对一下：
+        The returned object exposes objective_fun / objective_grad / eq_fun /
+        eq_jac / ineq_fun / ineq_jac. The typical use is comparing the AD gradient
+        against finite differences:
 
             nlp = OCPSolver(problem).to_nlp()
             g_ad = nlp.objective_grad(z)
 
-        eps : 用哪个 ε 录带。None（默认）表示用**续贯第一轮实际会用的那个**
-              （single 模式下即登记值本身）；给数值则所有路径约束都用它。
+        eps : which eps to tape with. None (default) uses the eps the FIRST
+              continuation round would actually use (in "single" mode that is the
+              registered value itself). Passing a number applies it to every path
+              constraint.
         """
         p = self.problem
         factor = p.eps_factors()[0]
@@ -124,17 +138,20 @@ class OCPSolver:
             self._build_tapes()
         return self.opt_fun
 
-    # ================= 内部实现 =================
+    # ================= internals =================
 
     def _build_tapes(self):
-        """录 AD 带。ε 已经烧进带子里，所以续贯的每一轮都必须重录。"""
+        """
+        Record the AD tapes. eps is baked into the tape as a constant, which is
+        why every continuation round has to re-record.
+        """
         z0 = self.problem.initial_guess()
         self.objective_ad, self.eq_ad, self.ineq_ad = build_ad_tapes(z0, self.problem)
         self.opt_fun = optimize_fun_class(self.objective_ad, self.eq_ad, self.ineq_ad)
         return self.opt_fun
 
     def _solve_once(self, z0, maxiter, ftol, disp):
-        """用当前这条带子解一次 NLP。"""
+        """Solve the NLP once using the tapes currently recorded."""
         bounds = self.problem.make_bounds()
 
         constraints = []
@@ -166,9 +183,10 @@ class OCPSolver:
 
     def _path_violation(self, t, X, U, theta):
         """
-        在网格点上求各路径不等式的 max h(t)。这是转译效果的直接诊断量：
-        ineq_resid 只告诉你 γ - ∫L_eps 是否 ≥0，而这里给出原始约束 h(t) ≤ 0
-        实际被违反了多少。
+        max h(t) over the grid points, for each path inequality. This is the direct
+        diagnostic for how well the transcription held: ineq_resid only tells you
+        whether gamma - int L_eps is non-negative, whereas this reports how much
+        the ORIGINAL constraint h(t) <= 0 is actually violated.
         """
         p = self.problem
         if not p.path_ineq_specs:
@@ -184,17 +202,19 @@ class OCPSolver:
                 try:
                     hv = np.atleast_1d(np.asarray(spec["hfun"](t[k], X[k], uk, theta), dtype=float))
                 except Exception:
-                    return None          # 用户的 hfun 只支持 AD 类型时静默跳过诊断
+                    # The user's hfun only supports AD types; skip the diagnostic quietly.
+                    return None
                 worst = max(worst, float(np.max(hv)))
             out.append(worst)
         return np.asarray(out, dtype=float)
 
     def _numeric_rollout(self, U, theta):
-        """用 problem 的 dyn/integrator 复算最优轨迹，供出图用。"""
+        """Replay the optimal trajectory with the problem's dyn/integrator, for plotting."""
         p = self.problem
         N, dt, nx, nu = p.N, p.dt, p.nx, p.nu
 
-        # 用问题提供的钩子根据 θ 生成数值初值；若没有则回退到固定 x0
+        # Use the problem's hook to build the numeric initial state from theta;
+        # fall back to the fixed x0 when there is none.
         if hasattr(p, "numeric_initial_state") and callable(p.numeric_initial_state):
             x = np.asarray(p.numeric_initial_state(theta), dtype=float)
         else:
@@ -212,7 +232,7 @@ class OCPSolver:
                 uk = np.array([U[k]], dtype=float)
             else:
                 uk = np.asarray(U[nu*k:nu*(k+1)], dtype=float)
-            x = step(x, uk, dt, f_num)  # 多子步由 integrator 内部完成
+            x = step(x, uk, dt, f_num)  # substeps are handled inside the integrator
             X[k+1] = x
 
         return t, X

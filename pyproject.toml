@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "admiser"
-# 单一版本号来源：src/admiser/_version.py（避免与 __version__ 漂移）
+# Single source of truth for the version: src/admiser/_version.py
 dynamic = ["version"]
 description = "A unified optimal control problem solver inspired by Teo's control parametrization approaches enhanced by automatic differentiation"
 readme = "README.md"
 license = "MIT"
 authors = [{name = "Bowen Zhao"}]
-# 3.10 起才支持 `X | None` 形式的运行时注解（ocp_problem_builders.py 用到）
+# `X | None` runtime annotations (used in ocp_problem_builders.py) need 3.10
 requires-python = ">=3.10"
 dependencies = [
   "numpy",

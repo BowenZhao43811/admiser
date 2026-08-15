@@ -1,3 +1,4 @@
+# my_state_constrained_problem.py -- a pure state path constraint
 import numpy as np
 from functools import partial
 
@@ -12,7 +13,7 @@ nu, nx = 1, 2
 
 x0 = np.array([0.0, -1.0], dtype=float)
 
-u0 = 1.0  # 初猜：恒定控制
+u0 = 1.0  # initial guess: constant control
 
 def dyn(x, u, theta=None):
     x1, x2 = x
@@ -42,16 +43,17 @@ problem = OCPProblem(
 )
 problem.quad_scheme = 'rk4'
 
-# 路径不等式：h(t) ≤ 0
+# path inequality h(t) <= 0, i.e. x2(t) <= 8*(t-0.5)^2 - 0.5
 def hfun(t, x, u, th):
     return -8.0 * (t - 0.5)**2 + 0.5 + x[1]
 
-# 省略 gamma 即按 γ = T·ε/4 自动取值，并在续贯模式下随 ε 同步收缩
+# Omitting gamma gives gamma = T*eps/4 automatically, kept in sync as eps shrinks.
 problem.add_path_ineq(hfun=hfun, eps=1e-4)
 
-# ===== 求解模式：写在这里，求解端只管调 OCPSolver(problem).solve() =====
-# mode="single"       ：用上面登记的 ε=1e-4 直接解一次
-# mode="continuation" ：ε 视为终点，按 1e-1 → 1e-2 → 1e-3 → 1e-4 逐轮热启动求解
+# ===== solve mode: declared here, the solving side just calls OCPSolver(problem).solve() =====
+# mode="single"       : solve once with the registered eps = 1e-4
+# mode="continuation" : eps is the FINAL value; the rounds run
+#                       1e-1 -> 1e-2 -> 1e-3 -> 1e-4, each warm-started
 problem.set_transcription(mode="continuation", n_rounds=4, shrink=0.1)
 
 __all__ = ["problem", "N", "dt", "T", "hfun"]

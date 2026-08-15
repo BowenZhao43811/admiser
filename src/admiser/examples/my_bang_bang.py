@@ -1,24 +1,24 @@
-# my_bang_bang.py  —— 新版（canonical constraints，无显式约束）
+# my_bang_bang.py -- canonical-constraint version (this problem has no constraints)
 
 import numpy as np
 from functools import partial
 
 from admiser import OCPProblem
 from admiser import rk4_substeps
-from admiser import make_builders  # 仅构建 objective_builder
+from admiser import make_builders  # builds the objective_builder only
 
-# --- 网格 / 维度 ---
+# --- grid / dimensions ---
 T, N = 1.0, 21
 dt = T / N
 nx, nu = 2, 2
 
-# 初始状态
+# initial state
 x0 = np.array([1.0, 0.0], dtype=float)
 
-# 控制初猜
+# control initial guess
 u0 = np.array([1.0, 1.0], dtype=float)
 
-# --- 动力学 ---
+# --- dynamics ---
 # x = [x1, x2], u = [u1, u2]
 def dyn(x, u, theta=None):
     x1, x2 = x
@@ -27,12 +27,13 @@ def dyn(x, u, theta=None):
     dx2 = -x1 + u1
     return np.array([dx1, dx2], dtype=object)
 
-# --- 被积函数 L(t,x,u) ---
-# J = ∫_0^1 ( -6 x1 - 12 x2 + 3 u1 + u2 ) dt
+# --- integrand L(t, x, u) ---
+# J = int_0^1 ( -6*x1 - 12*x2 + 3*u1 + u2 ) dt
 def L(t, x, u, theta):
     return (-6.0 * x[0]) + (-12.0 * x[1]) + (3.0 * u[0]) + (u[1])
 
-# 只需要目标构建器；约束全部走 canonical API（本例没有约束）
+# Only the objective builder is needed; constraints would go through the
+# canonical add_* API (this example has none).
 objective_builder = make_builders(
     dyn=dyn,
     L=L,
@@ -40,24 +41,24 @@ objective_builder = make_builders(
     quad='rk4',
 )
 
-# --- 控制盒约束 ---
+# --- control box bounds ---
 def control_bounds_builder(problem: OCPProblem):
     return [(-10.0, 10.0)] * (problem.N * problem.nu)
 
-# --- 组装问题 ---
+# --- assemble the problem ---
 problem = OCPProblem(
     N=N, dt=dt,
-    x0=x0,                # 无 xT；本例无终端/路径/积分约束
+    x0=x0,                # no xT; no terminal, path or integral constraints here
     u0 = u0,
     dyn=dyn,
     integrator=partial(rk4_substeps, m_sub=10),
     nu=nu, nx=nx,
     objective_builder=objective_builder,
     control_bounds_builder=control_bounds_builder,
-    ntheta=0,             # 无系统参数
+    ntheta=0,             # no system parameters
 )
 
-# 采样位置（子步中点）
+# 4th-order quadrature, matching the state integrator (see QUAD_SCHEMES)
 problem.quad_scheme = 'rk4'
 
-__all__ = ["problem", "N", "dt"]
+__all__ = ["problem", "N", "dt", "T"]

@@ -244,10 +244,10 @@ for r in res["rounds"]:
 ```
 
 ```
-[ADMISER] 第 1/4 轮  eps=1.000e-01  J=+0.14636838  max h(t)=+7.975e-02  status=0  nit=95
-[ADMISER] 第 2/4 轮  eps=1.000e-02  J=+0.167629    max h(t)=+7.649e-03  status=0  nit=106
-[ADMISER] 第 3/4 轮  eps=1.000e-03  J=+0.1700801   max h(t)=+1.144e-05  status=0  nit=131
-[ADMISER] 第 4/4 轮  eps=1.000e-04  J=+0.17042904  max h(t)=-5.965e-04  status=0  nit=107
+[ADMISER] round 1/4 eps=1.000e-01  J=+0.14636838  max h(t)=+7.975e-02  status=0  nit=95
+[ADMISER] round 2/4 eps=1.000e-02  J=+0.167629    max h(t)=+7.649e-03  status=0  nit=106
+[ADMISER] round 3/4 eps=1.000e-03  J=+0.1700801   max h(t)=+1.144e-05  status=0  nit=131
+[ADMISER] round 4/4 eps=1.000e-04  J=+0.17042904  max h(t)=-5.965e-04  status=0  nit=107
 ```
 
 The starting ε is given as a **ratio**, not an absolute value: ε carries the units of its own `h`, so several path constraints cannot share one absolute start — but they can share a shrink ratio. Each constraint runs `eps/shrink^(n_rounds-1) → … → eps`, landing exactly on its registered value in the final round.

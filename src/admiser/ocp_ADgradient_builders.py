@@ -1,19 +1,25 @@
-# optimiza_fun_class.py
+# ocp_ADgradient_builders.py
 
 import numpy as np
 
 class optimize_fun_class:
     """
-    把 cppad_py.d_fun 封装成 SciPy minimize + SLSQP 友好的接口。
+    Wrap cppad_py.d_fun tapes into an interface that SciPy's minimize/SLSQP can use.
 
-    - objective_ad: au -> [J]
-    - constraint_ad: au -> g(U) , shape (m,)
+    Inputs
+    ------
+    objective_ad : tape mapping z -> [J]
+    eq_ad        : tape mapping z -> G(z), shape (m_eq,), optional
+    ineq_ad      : tape mapping z -> C(z), shape (m_ineq,), optional
 
-    暴露:
-    - objective_fun(U) -> float
-    - objective_grad(U) -> grad shape (n,)
-    - constraint_fun(U) -> g(U) shape (m,)
-    - constraint_jac(U) -> Jacobian dg/dU shape (m,n)
+    Exposes
+    -------
+    objective_fun(z)  -> float
+    objective_grad(z) -> gradient, shape (n,)
+    eq_fun(z)         -> G(z), shape (m_eq,)
+    eq_jac(z)         -> dG/dz, shape (m_eq, n)
+    ineq_fun(z)       -> C(z), shape (m_ineq,)
+    ineq_jac(z)       -> dC/dz, shape (m_ineq, n)
     """
     def __init__(self, objective_ad, eq_ad=None, ineq_ad=None):
         self.objective_ad = objective_ad
@@ -36,10 +42,9 @@ class optimize_fun_class:
         return self.eq_ad.jacobian(x) if self.eq_ad is not None else np.zeros((0, x.size))
 
     # ---- inequality (optional) ----
-    # SciPy: type='ineq' 需要 fun(x) >= 0
+    # SciPy convention: type='ineq' requires fun(x) >= 0
     def ineq_fun(self, x):
         return self.ineq_ad.forward(0, x) if self.ineq_ad is not None else np.array([], dtype=float)
 
     def ineq_jac(self, x):
         return self.ineq_ad.jacobian(x) if self.ineq_ad is not None else np.zeros((0, x.size))
-

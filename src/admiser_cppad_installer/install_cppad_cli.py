@@ -10,25 +10,25 @@ def main() -> None:
     """Console entry point for `admiser-install-cppad`."""
 
     print("==============================================")
-    print("  ADMISER CppAD / cppad_py 安装向导")
-    print("  (当前实现仅在 Debian/Ubuntu/WSL 上测试通过)")
+    print("  ADMISER CppAD / cppad_py installation helper")
+    print("  (tested on Debian/Ubuntu/WSL only)")
     print("==============================================")
     print()
 
-    # 用 __file__ 所在目录定位 .sh 文件
+    # locate the shell script relative to this file
     pkg_dir = Path(__file__).resolve().parent
     script_path = pkg_dir / "build_cppad.sh"
 
     if not script_path.is_file():
-        print(f"错误：找不到脚本文件：{script_path}", file=sys.stderr)
+        print(f"error: install script not found: {script_path}", file=sys.stderr)
         raise SystemExit(1)
 
     bash = os.environ.get("BASH", "bash")
 
-    print(f"将执行安装脚本：{script_path}")
-    print("提示：")
-    print("  - 你可以直接回车使用默认虚拟环境名 admiser_venv；")
-    print("  - 或者在运行前设置环境变量，例如：")
+    print(f"running install script: {script_path}")
+    print("Notes:")
+    print("  - the script installs into the virtual environment that is currently active;")
+    print("  - environment variables can be set beforehand, e.g.:")
     print("      VENV_DIR=myenv admiser-install-cppad")
     print()
 
@@ -37,5 +37,5 @@ def main() -> None:
     try:
         subprocess.run([bash, str(script_path)], check=True, env=env)
     except subprocess.CalledProcessError as exc:
-        print(f"安装失败，退出码：{exc.returncode}", file=sys.stderr)
+        print(f"installation failed with exit code {exc.returncode}", file=sys.stderr)
         raise SystemExit(exc.returncode)

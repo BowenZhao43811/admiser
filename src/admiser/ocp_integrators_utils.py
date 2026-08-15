@@ -1,62 +1,78 @@
 # ocp_integrators_utils.py
 """
-子步 RK4 积分器，以及沿轨迹求积（quadrature）的方案族。
+Substep RK4 integrator, and the family of schemes used to integrate quantities
+along the resulting trajectory.
 
-背景
-----
-控制参数化把每一段 [t_k, t_k+dt) 上的控制固定为常值，段内用多子步 RK4 把状态
-往前推。除了状态之外，我们还需要沿着同一条轨迹算若干个积分：
+Background
+----------
+Control parametrization holds the control constant on each segment
+[t_k, t_k + dt) and advances the state through that segment with several RK4
+substeps. Besides the state, several integrals along the same trajectory are
+needed:
 
-    目标函数     ∫ L(t,x,u,θ) dt
-    积分型约束   ∫ q(t,x,u,θ) dt
-    路径约束转译 ∫ L_ε(h(t,x,u,θ)) dt
+    objective            int L(t,x,u,theta) dt
+    integral constraints int q(t,x,u,theta) dt
+    path transcription   int L_eps(h(t,x,u,theta)) dt
 
-这些积分**不反馈到状态**，所以可以在推进状态的同时顺带累加。做法是由积分器在
-若干采样点上回调 accumulate_cb(t_i, x_i, u, w_i)，调用方在回调里累加
-w_i * 被积函数，全部子步累加完即得 ∫。
+None of these feed back into the state, so they can be accumulated while the
+state is being advanced. The integrator does this by calling back at a number of
+sample points, accumulate_cb(t_i, x_i, u, w_i); the caller accumulates
+w_i * integrand, and summing over all substeps yields the integral.
 
-两个独立的精度
---------------
-状态本身始终由经典 RK4 推进，是 4 阶的。但**积分的精度由采样方案单独决定**，
-两者并不自动一致：早期版本用欧拉半步中点采样，状态 4 阶而积分只有 2 阶。
-
-一个采样方案的阶数受两件事同时限制：
-
-  1. 求积法则本身的阶（矩形 1 阶、中点/梯形 2 阶、Simpson 4 阶……）
-  2. **各采样点上状态估计的精度**
-
-第 2 条常被忽略，却往往才是瓶颈。例如 Simpson 法则本身是 4 阶的，但若中点状态
-只取欧拉半步 x+½h·k1（误差 O(h²)），整体就退回 2 阶——白白多做两次被积函数
-求值却一分精度都没买到（见下表 simpson 一行的说明）。
-
-设计约束：零额外动力学求值
+Two independent accuracies
 --------------------------
-下面所有方案都只复用 RK4 已经算出的 k1..k4 与由它们构成的中间状态，**不额外
-求值 f**。代价只是被积函数 g 的求值次数（见各方案的 n_eval），它直接决定 AD
-tape 的规模，因此高阶方案的开销是"tape 变大"而不是"多解一次 ODE"。
+The state is always advanced by classical RK4 and is therefore 4th order. The
+accuracy of the integrals, however, is decided separately by the sampling scheme
+and is NOT automatically the same: an earlier version of this package sampled the
+Euler half-step midpoint, giving a 4th-order state but only 2nd-order integrals.
 
-方案族（阶数均为实测值，测试问题 x'=x, g=t²x, ∫₀¹t²eᵗdt = e-2）
------------------------------------------------------------------
-    名称          阶   n_eval  采样点
-    'left'         1     1     (t,     x)                     左矩形
-    'right'        1     1     (t+h,   x_end)                 右矩形
-    'midpoint'     2     1     (t+h/2, x+½h·k1)               中点法则
-    'trapezoid'    2     2     两端点，权重 h/2, h/2           梯形法则
-    'simpson'      3     3     (t,x), (t+h/2, x+¼h(k1+k2)), (t+h, x_end)
-    'rk4'          4     4     RK4 的四个级点，权重 h/6,h/3,h/3,h/6
+The order of a scheme is limited by two things at once:
 
-QUAD_SCHEMES 是唯一的方案名来源，不设别名：方案名在全package范围内只有这一套
-写法，拼错或用了旧写法都会立即报错，而不是被静默接受成另一种精度。
+  1. the order of the quadrature rule itself (rectangle 1, midpoint/trapezoid 2,
+     Simpson 4, ...)
+  2. the accuracy of the STATE ESTIMATE at each sample point
 
-关于 'simpson' 的中点：取两个半步估计的平均 ½[(x+½h·k1)+(x+½h·k2)] = x+¼h(k1+k2)。
-这两个估计对真实中点的误差恰为 ∓⅛h²·f'f，相加时首阶误差相消，因而该平均点是
-O(h³) 精度，Simpson 整体达到 3 阶。若中点改用 x+½h·k1 或 x+½h·k2 中的任何单独
-一个，整体都只有 2 阶（实测 1.99 / 1.98）——这就是上面第 2 条限制的直接体现。
+The second is easy to overlook and is usually the binding one. Simpson's rule,
+for instance, is 4th order, but if its midpoint state is only the Euler half-step
+x + h/2*k1 (error O(h^2)) the whole thing falls back to 2nd order -- paying for
+two extra integrand evaluations and buying no accuracy at all (see the note on
+'simpson' below).
 
-关于 'rk4'：等价于把被积函数当作增广状态 y' = g(t,x,u) 与 x 一起用同一套 RK4
-积分。由于 RK4 对任意光滑 ODE 系统都是 4 阶的，∫g dt 自动与状态同阶。注意第四
-个采样点必须是 RK4 第 4 级的自变量 x+h·k3，**而不是**步末状态 x_end；换成 x_end
-会破坏 RK4 的阶条件，实测掉到 3 阶。
+Design constraint: no extra dynamics evaluations
+------------------------------------------------
+Every scheme below reuses only the k1..k4 already computed by RK4 and the
+intermediate states formed from them; none of them evaluate f again. The only
+cost is the number of evaluations of the integrand g (n_eval), which drives the
+size of the AD tape. So a higher order costs a bigger tape, not a second ODE solve.
+
+The scheme family (orders are measured, on x' = x, g = t^2*x,
+int_0^1 t^2 e^t dt = e - 2)
+--------------------------------------------------------------------------------
+    name          order  n_eval  sample points
+    'left'          1      1     (t,       x)                     left rectangle
+    'right'         1      1     (t+h,     x_end)                 right rectangle
+    'midpoint'      2      1     (t+h/2,   x + h/2*k1)            midpoint rule
+    'trapezoid'     2      2     both endpoints, weights h/2, h/2 trapezoid rule
+    'simpson'       3      3     (t,x), (t+h/2, x + h/4*(k1+k2)), (t+h, x_end)
+    'rk4'           4      4     the four RK4 stage points, weights h/6,h/3,h/3,h/6
+
+On the midpoint used by 'simpson': it averages the two half-step estimates,
+1/2*[(x + h/2*k1) + (x + h/2*k2)] = x + h/4*(k1 + k2). Their errors against the
+true midpoint are exactly -/+ h^2/8 * f'f, so the leading terms cancel and the
+averaged point is O(h^3) accurate, which lifts Simpson to 3rd order overall. Using
+either half-step estimate alone leaves the whole scheme at 2nd order (measured
+1.99 / 1.98) -- a direct demonstration of limitation 2 above.
+
+On 'rk4': it is equivalent to treating the integrand as an augmented state
+y' = g(t,x,u) and integrating it with the very same RK4 tableau. Since RK4 is 4th
+order for any smooth ODE system, int g dt automatically matches the accuracy of
+the state. Note that the fourth sample point must be the stage-4 argument
+x + h*k3, NOT the step-end state x_end; substituting x_end breaks RK4's order
+conditions and drops the scheme to 3rd order in practice.
+
+QUAD_SCHEMES is the single source of scheme names; there are no aliases. Each
+scheme has exactly one spelling package-wide, so a typo or an outdated name fails
+loudly instead of being silently accepted as a different accuracy.
 """
 
 from typing import NamedTuple
@@ -65,49 +81,57 @@ import numpy as np
 
 
 class QuadScheme(NamedTuple):
-    """一个求积方案的元信息（阶数为实测值，n_eval 决定 AD tape 规模）。"""
-    order: int      # 全局收敛阶
-    n_eval: int     # 每个子步对被积函数的求值次数
-    summary: str    # 一句话说明
+    """
+    Metadata for one quadrature scheme. `order` is the measured global order of
+    convergence; `n_eval` drives the size of the AD tape.
+    """
+    order: int      # global order of convergence
+    n_eval: int     # integrand evaluations per substep
+    summary: str    # one-line description
 
 
-#: 全部规范方案名 -> 元信息。想知道某个名字是几阶，用 quad_order(name)。
+#: All canonical scheme names -> metadata. Use quad_order(name) to query the order.
 QUAD_SCHEMES = {
-    'left':      QuadScheme(1, 1, "左矩形：子步左端点"),
-    'right':     QuadScheme(1, 1, "右矩形：子步右端点（步末状态）"),
-    'midpoint':  QuadScheme(2, 1, "中点法则：欧拉半步中点 x+½h·k1"),
-    'trapezoid': QuadScheme(2, 2, "梯形法则：两端点，权重 h/2, h/2"),
-    'simpson':   QuadScheme(3, 3, "Simpson 法则：中点取 x+¼h(k1+k2)（两半步估计的平均）"),
-    'rk4':       QuadScheme(4, 4, "RK4 增广状态求积：四个级点，权重 h/6, h/3, h/3, h/6"),
+    'left':      QuadScheme(1, 1, "left rectangle: substep left endpoint"),
+    'right':     QuadScheme(1, 1, "right rectangle: substep right endpoint (step-end state)"),
+    'midpoint':  QuadScheme(2, 1, "midpoint rule: Euler half-step midpoint x + h/2*k1"),
+    'trapezoid': QuadScheme(2, 2, "trapezoid rule: both endpoints, weights h/2, h/2"),
+    'simpson':   QuadScheme(3, 3, "Simpson's rule with midpoint x + h/4*(k1+k2), the average "
+                                  "of the two half-step estimates"),
+    'rk4':       QuadScheme(4, 4, "RK4 augmented-state quadrature: four stage points, "
+                                  "weights h/6, h/3, h/3, h/6"),
 }
 
+
 def validate_quad_scheme(name: str) -> str:
-    """校验求积方案名并原样返回；不认识的名字直接报错。"""
+    """Validate a quadrature scheme name and return it unchanged; unknown names raise."""
     if name not in QUAD_SCHEMES:
         raise ValueError(
             f"unknown quad scheme {name!r}; expected one of {tuple(QUAD_SCHEMES)}. "
-            "（方案名拼错会导致积分项被静默跳过，因此这里直接报错。）"
+            "(A misspelled scheme name would silently skip the integral terms, "
+            "so this raises instead.)"
         )
     return name
 
 
 def quad_order(name: str) -> int:
-    """该求积方案的全局收敛阶。"""
+    """Global order of convergence of the given quadrature scheme."""
     return QUAD_SCHEMES[validate_quad_scheme(name)].order
 
 
 def _shift(t, delta):
-    """时间偏移；t0 为 None（调用方不需要时间）时保持 None。"""
+    """Offset a time value, keeping None when the caller does not track time."""
     return None if t is None else t + delta
 
 
 def _quad_samples(scheme, t, h, x, k1, k2, k3, x_end):
     """
-    给出某个子步 [t, t+h] 上的采样点列表 [(t_i, x_i, w_i), ...]，
-    调用方累加 ∑ w_i * g(t_i, x_i) 即得该子步上的 ∫g dt 近似。
+    Sample points for one substep [t, t+h], as a tuple of (t_i, x_i, w_i).
+    Accumulating sum(w_i * g(t_i, x_i)) approximates int g dt over that substep.
 
-    不变量：∑ w_i == h（每个方案都是对同一段长度 h 做求积）。
-    入参 k1..k3 与 x_end 均由 RK4 步进过程免费提供，此处不再求值 f。
+    Invariant: sum(w_i) == h, since every scheme integrates over the same span.
+    k1..k3 and x_end are supplied for free by the RK4 step, so f is never
+    evaluated here.
     """
     t_mid = _shift(t, 0.5 * h)
     t_end = _shift(t, h)
@@ -119,7 +143,7 @@ def _quad_samples(scheme, t, h, x, k1, k2, k3, x_end):
         return ((t_end, x_end, h),)
 
     if scheme == 'midpoint':
-        # 欧拉半步中点：误差 O(h²)，配中点法则得 2 阶
+        # Euler half-step midpoint: error O(h^2), giving 2nd order with the midpoint rule
         return ((t_mid, x + 0.5 * h * k1, h),)
 
     if scheme == 'trapezoid':
@@ -127,14 +151,16 @@ def _quad_samples(scheme, t, h, x, k1, k2, k3, x_end):
                 (t_end, x_end, 0.5 * h))
 
     if scheme == 'simpson':
-        # 两个半步估计的平均，首阶误差相消 -> O(h³) 的中点，整体 3 阶
+        # Average of the two half-step estimates; leading errors cancel, giving an
+        # O(h^3) midpoint and 3rd order overall.
         x_mid = x + 0.25 * h * (k1 + k2)
         return ((t,     x,     h / 6.0),
                 (t_mid, x_mid, 4.0 * h / 6.0),
                 (t_end, x_end, h / 6.0))
 
     if scheme == 'rk4':
-        # RK4 的四个级点。末点是第 4 级的自变量 x+h·k3，不是步末状态 x_end
+        # The four RK4 stage points. The last one is the stage-4 argument
+        # x + h*k3, not the step-end state x_end.
         return ((t,     x,                 h / 6.0),
                 (t_mid, x + 0.5 * h * k1,  h / 3.0),
                 (t_mid, x + 0.5 * h * k2,  h / 3.0),
@@ -145,11 +171,13 @@ def _quad_samples(scheme, t, h, x, k1, k2, k3, x_end):
 
 def rk4_step(x, u, h, dyn):
     """
-    单步经典四阶 RK（不带求积回调，供独立使用）：
-        x_{k+1} = x_k + h/6 * (k1 + 2k2 + 2k3 + k4)
+    A single classical fourth-order Runge-Kutta step, without quadrature
+    callbacks, for standalone use:
 
-    x, u: 可以是 float / numpy.array / 包含 cppad_py.a_double 的数组
-    dyn:  用户给的动力学函数 dyn(x,u) -> xdot
+        x_{k+1} = x_k + h/6 * (k1 + 2*k2 + 2*k3 + k4)
+
+    x, u : float / numpy.array / arrays holding cppad_py.a_double
+    dyn  : the user's dynamics, dyn(x, u) -> xdot
     """
     k1 = dyn(x, u)
     k2 = dyn(x + 0.5 * h * k1, u)
@@ -160,38 +188,44 @@ def rk4_step(x, u, h, dyn):
 
 def rk4_substeps(x, u, dt, f, m_sub=5, accumulate_cb=None, t0=None, quad='rk4'):
     """
-    多子步 RK4 积分器，可选地在子步内按指定求积方案回调，用于沿轨迹累加积分。
+    Multi-substep RK4 integrator, optionally calling back within each substep
+    according to the chosen quadrature scheme, so that integrals along the
+    trajectory can be accumulated.
 
-    参数
-    ----
+    Parameters
+    ----------
     x : ndarray (nx,)
-        段初状态，元素可为 float 或 cppad_py.a_double
+        State at the start of the segment; elements may be float or cppad_py.a_double.
     u : ndarray (nu,)
-        本段的（分段常值）控制
+        The (piecewise-constant) control on this segment.
     dt : float | a_double
-        本段总时长
+        Total duration of this segment.
     f : callable
         f(x, u) -> dx/dt
     m_sub : int
-        子步数；本段被均分为 m_sub 个长 h = dt/m_sub 的子步
+        Number of substeps; the segment is split evenly into m_sub steps of h = dt/m_sub.
     accumulate_cb : callable | None
-        accumulate_cb(t_i, x_i, u, w_i)；调用方在回调里累加 w_i * 被积函数。
-        为 None 时完全跳过求积（纯状态推进，例如求解后的数值复演）。
-        注意第 4 个参数是**求积权重**而不是子步长：一个子步内可能被回调多次，
-        权重之和恒等于 h。
+        accumulate_cb(t_i, x_i, u, w_i); the caller accumulates w_i * integrand.
+        When None, quadrature is skipped entirely (pure state propagation, e.g.
+        the numeric rollout after solving).
+        Note the fourth argument is a QUADRATURE WEIGHT, not the substep length:
+        a substep may fire the callback several times, and the weights sum to h.
     t0 : float | a_double | None
-        本段起点时间。为 None 时回调收到的 t_i 也是 None（被积函数不依赖 t 时可用）
+        Start time of this segment. When None, the callback receives t_i = None,
+        which is fine if the integrand does not depend on t.
     quad : str
-        求积方案名，见 QUAD_SCHEMES。默认 'rk4'（4 阶，与状态同阶）
+        Quadrature scheme name, see QUAD_SCHEMES. Default 'rk4' (4th order,
+        matching the state).
 
-    返回
-    ----
-    x_{k+1} : 段末状态
+    Returns
+    -------
+    x_{k+1} : state at the end of the segment
 
-    备注
-    ----
-    无论选哪个求积方案，状态都由完整的 RK4 推进，因此**段末状态与 quad 无关**；
-    quad 只影响 ∫ 的精度。各方案都只复用 k1..k4，不额外求值 f。
+    Notes
+    -----
+    The state is advanced by full RK4 regardless of the scheme, so the END STATE
+    DOES NOT DEPEND ON `quad`; the scheme only affects the accuracy of the
+    integrals. Every scheme reuses k1..k4 and never evaluates f again.
     """
     scheme = validate_quad_scheme(quad)
 
