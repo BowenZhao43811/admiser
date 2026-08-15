@@ -2,6 +2,12 @@
 import numpy as np
 import cppad_py
 
+from .ocp_integrators_utils import QUAD_MODES
+
+#: 包级默认求积模式：与状态同为 4 阶，且不增加动力学求值次数
+DEFAULT_QUAD = 'rk4'
+
+
 class OCPProblem:
     """
     统一的 OCP 问题容器。
@@ -72,8 +78,28 @@ class OCPProblem:
         self.path_eq_specs   = []  # 路径等式 h(t)=0 → ∫ h^2 dt = 0 或 ∫ smooth|h| dt = 0
         self.path_ineq_specs = []  # 路径不等式 h≤0 → ∫ L_eps(h) dt ≤ γ
 
-        # 子步积分采样模式
-        self.path_quad_mode = 'rk4-mid'
+        # 子步积分采样模式。None = 未指定，由 objective_builder 自带的 quad 决定
+        # （见 resolve_quad_mode）；显式赋值则覆盖之，对目标与全部约束统一生效。
+        self.path_quad_mode = None
+
+    # ---------- 求积模式解析 ----------
+    def resolve_quad_mode(self) -> str:
+        """
+        全局唯一的求积模式解析，目标与所有约束都必须经由此处取值，优先级：
+          1. problem.path_quad_mode（显式赋值）
+          2. make_builders(quad=...) 记在 objective_builder.quad 上的值
+          3. 包级默认 DEFAULT_QUAD
+        """
+        mode = getattr(self, "path_quad_mode", None)
+        if mode is None:
+            mode = getattr(self.objective_builder, "quad", None)
+        if mode is None:
+            mode = DEFAULT_QUAD
+        if mode not in QUAD_MODES:
+            raise ValueError(
+                f"unknown quad mode {mode!r}; expected one of {QUAD_MODES}."
+            )
+        return mode
 
     # ---------- 规范化约束注册 API ----------
     def add_terminal_eq(self, psi):
@@ -94,9 +120,35 @@ class OCPProblem:
         assert sense in ("<=", ">=")
         self.int_ineq_specs.append(dict(qfun=qfun, bound=float(bound), sense=sense))
 
-    def add_path_ineq(self, hfun, eps: float, gamma: float = 0.0):
-        """h(x,u,θ) ≤ 0  —>  ∫ L_eps(h) dt ≤ γ"""
-        self.path_ineq_specs.append(dict(hfun=hfun, eps=float(eps), gamma=float(gamma)))
+    def auto_gamma(self, eps: float) -> float:
+        """
+        约束转译中与 eps 相容的 γ 取法：γ = T·ε/4，T = N·dt。
+
+        依据：L_eps(h) - max(h,0) ∈ [0, ε/4]，在 h ≤ 0 上 L_eps(h) 的最大值恰为
+        L_eps(0) = ε/4。因此
+          * 任何真正满足 h(t) ≤ 0 的轨迹都满足 ∫L_eps dt ≤ T·ε/4 —— 转译后的问题
+            不会把原问题的可行解（包括最优解）排除在外；
+          * 反过来 ∫max(h,0) dt ≤ ∫L_eps dt ≤ γ = T·ε/4，即违反量的 L¹ 范数被
+            T·ε/4 控制，ε→0 时收敛到原约束。
+        取 γ=0 则强制 L_eps ≡ 0，等价于 h(t) ≤ -ε（严格内点），既过于保守又常常
+        让 SLSQP 在边界上失去下降方向。
+        """
+        return float(self.N * self.dt * float(eps) / 4.0)
+
+    def add_path_ineq(self, hfun, eps: float, gamma: float | None = None):
+        """
+        h(x,u,θ) ≤ 0  —>  ∫ L_eps(h) dt ≤ γ
+
+        gamma=None（默认）表示按 auto_gamma(eps) = T·ε/4 自动取值，并在续贯
+        求解（OCPSolver.solve_transcription）收缩 ε 时随之更新；显式传入数值则
+        固定不变。
+        """
+        auto = gamma is None
+        self.path_ineq_specs.append(dict(
+            hfun=hfun, eps=float(eps),
+            gamma=self.auto_gamma(eps) if auto else float(gamma),
+            gamma_auto=auto,
+        ))
 
     def add_path_eq(self, hfun, mode: str = "L2", eps_abs: float = 1e-6):
         """
@@ -111,6 +163,47 @@ class OCPProblem:
     def has_params(self) -> bool:
         return self.ntheta > 0
 
+    def dt_of_segment(self, k: int):
+        """
+        第 k 段的时长（a_double）。目标 tape 与约束 tape 必须都走这一个入口，
+        否则将来接入时间尺度变换（CPET）时两者会静默用上不同的时间网格。
+        子类/用户可实现 _current_dt(k) 返回 a_double 以支持变步长。
+        """
+        if callable(getattr(self, "_current_dt", None)):
+            return self._current_dt(k)
+        return cppad_py.a_double(self.dt)
+
+    def validate(self) -> None:
+        """在录带前做一次结构检查，把 CppAD/SciPy 抛出的天书换成可读的报错。"""
+        if not callable(self.objective_builder):
+            raise ValueError(
+                "OCPProblem.objective_builder 未设置。请用 make_builders(dyn=..., L=..., Phi=...) "
+                "生成后传给 OCPProblem(objective_builder=...)。"
+            )
+        if not callable(self.integrator):
+            raise ValueError("OCPProblem.integrator 未设置，例如 partial(rk4_substeps, m_sub=10)。")
+        if not callable(self.dyn):
+            raise ValueError("OCPProblem.dyn 未设置。")
+        if self.N <= 0 or self.dt <= 0:
+            raise ValueError(f"需要 N>0 且 dt>0，当前 N={self.N}, dt={self.dt}.")
+        if self.x0.shape != (self.nx,):
+            raise ValueError(f"x0 形状 {self.x0.shape} 与 nx={self.nx} 不符。")
+
+        n_z = self.N * self.nu + (self.ntheta if self.has_params() else 0)
+        bnds = self.make_bounds()
+        if len(bnds) != n_z:
+            raise ValueError(
+                f"盒约束个数 {len(bnds)} 与决策变量维数 {n_z} (=N*nu+ntheta) 不符；"
+                "请检查 control_bounds_builder / param_bounds_builder 的返回长度。"
+            )
+        if self.initial_guess().size != n_z:
+            raise ValueError(
+                f"初猜维数 {self.initial_guess().size} 与决策变量维数 {n_z} 不符（检查 u0 / theta0）。"
+            )
+        if self.has_params() and self.theta0 is None:
+            print("[ADMISER] 提示：ntheta>0 但未提供 theta0，θ 初猜将全部取 0。")
+        self.resolve_quad_mode()
+
     # 供 AD tape 构建用：返回 a_double 初值
     def ad_initial_state(self, atheta):
         if callable(self._x0_from_theta_ad):
@@ -118,8 +211,10 @@ class OCPProblem:
         return np.array([cppad_py.a_double(v) for v in self.x0], dtype=object)
 
     # 供数值 rollout / 可视化用：返回 float 初值
+    # 触发条件必须与 ad_initial_state 完全一致（只看钩子是否可调用），否则
+    # X_opt 会和 tape 内部真正优化的那条轨迹对不上。钩子需自行处理 theta=None。
     def numeric_initial_state(self, theta=None):
-        if callable(self._x0_from_theta_numeric) and (theta is not None):
+        if callable(self._x0_from_theta_numeric):
             return self._x0_from_theta_numeric(theta, self)
         return self.x0.copy()
 
