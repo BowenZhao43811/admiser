@@ -50,7 +50,7 @@ objective_builder= make_builders(
     dyn=dyn,
     L=L,
     Phi=None,
-    quad='rk4',   # 你的 integrator 已支持子步采样位置
+    quad='rk4',   # 4 阶求积，与状态同阶（见 QUAD_SCHEMES）
 )
 
 # ---------------- 盒约束 ----------------

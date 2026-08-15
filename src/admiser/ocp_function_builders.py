@@ -35,8 +35,10 @@ def make_builders(
     返回：
       objective_builder(au, atheta, problem) -> np.array([J], dtype=object)
 
-    quad 为本目标函数默认的子步求积模式；若问题对象显式设置了
-    problem.path_quad_mode，则以后者为准（目标与约束保持同一模式）。
+    quad 为本目标函数默认的子步求积方案（可选值与各自的阶数见
+    ocp_integrators_utils.QUAD_SCHEMES）；若问题对象显式设置了
+    problem.path_quad_mode，则以后者为准——目标与所有约束必须共用同一方案，
+    否则 SLSQP 看到的目标与约束建立在不同离散化上，KKT 点没有意义。
     """
 
     def objective_builder(au, atheta, problem):

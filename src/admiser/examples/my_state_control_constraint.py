@@ -45,7 +45,7 @@ objective_builder= make_builders(
     dyn=dyn,
     L=L,
     Phi=Phi,
-    quad='rk4',   # 子步采样位置；与 integrator 一致
+    quad='rk4',   # 4 阶求积，与状态同阶（见 QUAD_SCHEMES）
 )
 
 # ===== 控制盒约束 =====

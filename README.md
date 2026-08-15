@@ -240,20 +240,44 @@ for h in res["continuation"]:
 
 ## Quadrature Accuracy
 
-The substep quadrature mode is set by `make_builders(quad=...)`, or globally by `problem.path_quad_mode` (which takes precedence, and applies to the objective **and** every integral/path constraint):
+The **state** is always advanced by full RK4. The integrals along that trajectory — the objective $\int L\,dt$, every integral constraint, and every transcribed path constraint — are accumulated by a separately chosen **quadrature scheme**, and its order is *not* automatically the same as the integrator's.
 
-| `quad` | sampling | order |
-|---|---|---|
-| `'rk4'` *(default)* | the four RK4 stage points, weights $h/6, h/3, h/3, h/6$ | **4** |
-| `'mid'` / `'rk4-mid'` | Euler half-step midpoint | 2 |
-| `'left'` / `'right'` | substep endpoints | 1 |
+Set it with `make_builders(quad=...)`, or globally with `problem.path_quad_mode` (which takes precedence, and applies to the objective **and** every constraint — they must share one scheme, or the KKT point is meaningless).
 
-`'rk4'` is equivalent to integrating the cost as an augmented state $\dot y = L(t,x,u,θ)$ with the same RK4 tableau, so $\int L\,dt$ is as accurate as the trajectory itself — and it costs **no extra evaluations of `dyn`**, only of `L` (which you must evaluate anyway). On $\dot x = x,\ x(0)=1,\ \int_0^1 x\,dt = e-1$:
+| `quad` | order | `n_eval` | sampling |
+|---|---|---|---|
+| `'rk4'` *(default)* | **4** | 4 | the four RK4 stage points, weights $h/6, h/3, h/3, h/6$ |
+| `'simpson'` | 3 | 3 | Simpson with midpoint $x + \tfrac{h}{4}(k_1+k_2)$ |
+| `'midpoint'` (aliases `'mid'`, `'rk4-mid'`) | 2 | 1 | Euler half-step midpoint $x + \tfrac{h}{2}k_1$ |
+| `'trapezoid'` | 2 | 2 | both endpoints, weights $h/2, h/2$ |
+| `'left'` / `'right'` | 1 | 1 | substep left / right endpoint |
+
+Every scheme reuses the $k_1..k_4$ that RK4 already computed, so **none of them cost extra evaluations of `dyn`**. `n_eval` is the number of *integrand* evaluations per substep — it is what drives AD tape size, so the price of a higher order is a bigger tape, not a second ODE solve.
+
+Measured orders on $\dot x = x,\ g = t^2 x,\ \int_0^1 t^2 e^t\,dt = e-2$:
 
 ```
-quad='mid'  err = 1.68e-02  4.34e-03  1.10e-03  2.77e-04  6.96e-05   → order 2.0
-quad='rk4'  err = 7.19e-05  4.98e-06  3.28e-07  2.10e-08  1.33e-09   → order 4.0
+scheme      n_eval      m=1       m=2       m=4       m=8      m=16   order
+left            1   2.97e-01  1.59e-01  8.23e-02  4.18e-02  2.11e-02   0.98
+right           1   3.82e-01  1.80e-01  8.76e-02  4.31e-02  2.14e-02   1.02
+midpoint        1   2.61e-02  6.64e-03  1.67e-03  4.19e-04  1.05e-04   2.00
+trapezoid       2   4.23e-02  1.06e-02  2.65e-03  6.64e-04  1.66e-04   2.00
+simpson         3   1.12e-04  1.70e-05  2.29e-06  2.95e-07  3.75e-08   2.96
+rk4             4   5.12e-05  3.22e-06  2.01e-07  1.26e-08  7.84e-10   4.00
 ```
+
+### Why the node accuracy matters more than the rule
+
+A scheme's order is capped by **both** the quadrature rule and the accuracy of the state estimate at each node — and the second is usually the binding one:
+
+- Simpson's rule is 4th order, but with the Euler half-step midpoint $x+\tfrac{h}{2}k_1$ (error $O(h^2)$) the whole thing collapses to **order 2** — three integrand evaluations buying nothing over `midpoint`'s one. It reaches order 3 only with the *averaged* midpoint $x+\tfrac{h}{4}(k_1+k_2)$, whose leading errors $\mp\tfrac{1}{8}h^2 f'f$ cancel.
+- `'rk4'`'s fourth node must be the stage-4 argument $x + h k_3$, **not** the step-end state $x_{n+1}$. Substituting $x_{n+1}$ breaks RK4's order conditions and drops it to order 3 (measured 2.96).
+
+`'rk4'` is exactly RK4 applied to the augmented state $\dot y = L(t,x,u,θ)$, which is why $\int L\,dt$ comes out as accurate as the trajectory.
+
+> ℹ️ `'rk4-mid'` is a **deprecated alias for `'midpoint'`**, kept so older problem files keep working unchanged. The name is misleading: it samples the Euler half-step $x+\tfrac{h}{2}k_1$ and is 2nd order — using $k_1$ does not confer RK4 accuracy. Write `'midpoint'` in new code.
+
+Programmatic access: `admiser.QUAD_SCHEMES` (name → order / `n_eval` / summary), `admiser.quad_order(name)`, `admiser.resolve_quad_name(name)`.
 
 ## Writing AD-safe Model Functions
 

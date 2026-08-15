@@ -2,9 +2,9 @@
 import numpy as np
 import cppad_py
 
-from .ocp_integrators_utils import QUAD_MODES
+from .ocp_integrators_utils import resolve_quad_name
 
-#: 包级默认求积模式：与状态同为 4 阶，且不增加动力学求值次数
+#: 包级默认求积方案：与状态同为 4 阶，且不增加动力学求值次数
 DEFAULT_QUAD = 'rk4'
 
 
@@ -82,24 +82,23 @@ class OCPProblem:
         # （见 resolve_quad_mode）；显式赋值则覆盖之，对目标与全部约束统一生效。
         self.path_quad_mode = None
 
-    # ---------- 求积模式解析 ----------
+    # ---------- 求积方案解析 ----------
     def resolve_quad_mode(self) -> str:
         """
-        全局唯一的求积模式解析，目标与所有约束都必须经由此处取值，优先级：
+        全局唯一的求积方案解析，目标与所有约束都必须经由此处取值，优先级：
           1. problem.path_quad_mode（显式赋值）
           2. make_builders(quad=...) 记在 objective_builder.quad 上的值
           3. 包级默认 DEFAULT_QUAD
+
+        返回的是**规范名**（别名如 'rk4-mid' 会被归一到 'midpoint'），因此
+        下游可以直接按规范名比较。不认识的名字在此报错，而不是拖到积分器里。
         """
         mode = getattr(self, "path_quad_mode", None)
         if mode is None:
             mode = getattr(self.objective_builder, "quad", None)
         if mode is None:
             mode = DEFAULT_QUAD
-        if mode not in QUAD_MODES:
-            raise ValueError(
-                f"unknown quad mode {mode!r}; expected one of {QUAD_MODES}."
-            )
-        return mode
+        return resolve_quad_name(mode)
 
     # ---------- 规范化约束注册 API ----------
     def add_terminal_eq(self, psi):

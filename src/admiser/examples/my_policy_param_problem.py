@@ -50,7 +50,7 @@ _ret = make_builders(
     dyn=dyn_with_policy,
     L=L,
     Phi=Phi,
-    quad='rk4',         # 与状态同为 4 阶的求积
+    quad='rk4',         # 4 阶求积，与状态同阶（见 QUAD_SCHEMES）
 )
 objective_builder = _ret[0] if isinstance(_ret, tuple) else _ret
 

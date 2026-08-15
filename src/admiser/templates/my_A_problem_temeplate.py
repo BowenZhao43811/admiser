@@ -48,7 +48,7 @@ objective_builder = make_builders(
     dyn=dyn,
     L=L,           # 可为 None
     Phi=Phi,       # 可为 None
-    quad='rk4' # 子步求积模式
+    quad='rk4'     # 子步求积方案：1~4 阶可选，见 admiser.QUAD_SCHEMES
 )
 
 # ============= 5) 可选：初值依赖 θ（x0 = x0(θ)） =============

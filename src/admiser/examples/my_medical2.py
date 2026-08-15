@@ -52,7 +52,7 @@ Phi = None  # 无终端代价
 # 由模板生成 objective_builder（内部在多子步 RK4 中精确积分 ∫L·dt）
 _ret = make_builders(
     dyn=dyn, L=L, Phi=Phi,
-    quad='rk4',    # 与状态同为 4 阶的求积
+    quad='rk4',    # 4 阶求积，与状态同阶（见 QUAD_SCHEMES）
 )
 objective_builder = _ret if callable(_ret) else _ret[0]
 constraint_builder = None  # 约束统一用 canonical API 注册

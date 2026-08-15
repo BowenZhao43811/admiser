@@ -15,14 +15,19 @@ except ImportError as _exc:       # pragma: no cover - 取决于用户环境
 # Directly exposed common APIs
 from .ocp_problem_builders import OCPProblem, DEFAULT_QUAD
 from .ocp_solver_builders import OCPSolver
-from .ocp_integrators_utils import rk4_substeps, rk4_step, QUAD_MODES
+from .ocp_integrators_utils import (
+    rk4_substeps, rk4_step,
+    QUAD_SCHEMES, QUAD_ALIASES, QUAD_MODES, quad_order, resolve_quad_name,
+)
 from .ocp_function_builders import make_builders
 from .ocp_smooth_utils import L_eps, smooth_abs
 
 __all__ = [
     "__version__",
     "OCPProblem", "OCPSolver", "make_builders",
-    "rk4_substeps", "rk4_step", "QUAD_MODES", "DEFAULT_QUAD",
+    "rk4_substeps", "rk4_step",
+    "QUAD_SCHEMES", "QUAD_ALIASES", "QUAD_MODES", "DEFAULT_QUAD",
+    "quad_order", "resolve_quad_name",
     "L_eps", "smooth_abs",
     "ensure_cppad_or_warn",
 ]
