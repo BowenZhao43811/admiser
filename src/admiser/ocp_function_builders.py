@@ -1,16 +1,18 @@
 # ocp_function_builders.py
-"""
+r"""
 make_builders 仅负责构建 objective_builder（\int L + Φ）。
 所有约束（终端/积分/路径，等式与不等式）请使用 OCPProblem.add_* API 注册，
 由 tapes.build_ad_tapes 在一次 rollout 中统一构建 eq_ad / ineq_ad。
 
-为兼容旧代码，本函数仍返回 (objective_builder, dummy_constraint_builder)，
-其中 dummy_constraint_builder 总是返回空数组。
+返回值是**单个** objective_builder 函数（早期版本曾返回二元组，现已取消）。
 """
 
 import numpy as np
 import cppad_py
 import inspect
+
+from .ocp_problem_builders import DEFAULT_QUAD
+
 
 def _bind_dyn_with_theta_ad(dyn, atheta):
     """把 dyn 统一成 f(x,u) = dyn(x,u,atheta?)（AD 版闭包）"""
@@ -27,12 +29,14 @@ def make_builders(
     # 以下两个参数保留以兼容旧调用，但不会再用于构造约束：
     terminal_eq=None,
     integral_eqs=None,
-    quad: str = 'rk4-mid',
+    quad: str = DEFAULT_QUAD,
 ):
     """
     返回：
       objective_builder(au, atheta, problem) -> np.array([J], dtype=object)
-      dummy_constraint_builder(...) -> empty (兼容旧接口)
+
+    quad 为本目标函数默认的子步求积模式；若问题对象显式设置了
+    problem.path_quad_mode，则以后者为准（目标与约束保持同一模式）。
     """
 
     def objective_builder(au, atheta, problem):
@@ -49,21 +53,17 @@ def make_builders(
 
         f = _bind_dyn_with_theta_ad(dyn, atheta)
 
-        def acc_cb(t_sub, x_sub, u_sub, h_sub):
+        def acc_cb(t_sub, x_sub, u_sub, w_sub):
             nonlocal J  # <<< 关键：必须放在函数体前部，且在首次使用 J 之前
             if L is None:
                 return
-            # h_sub 可能是 float 或 a_double；统一为 a_double
-            h_ad = h_sub if isinstance(h_sub, cppad_py.a_double) else cppad_py.a_double(float(h_sub))
+            # w_sub 是求积权重，可能是 float 或 a_double；统一为 a_double
+            w_ad = w_sub if isinstance(w_sub, cppad_py.a_double) else cppad_py.a_double(float(w_sub))
             _t   = t_sub if (t_sub is not None) else t
             Lval = L(_t, x_sub, u_sub, atheta)
-            J    = J + h_ad * Lval
+            J    = J + w_ad * Lval
 
-        def _dt_k(_k):
-            # 预留 CPET 接口（未实现则用常数 dt）
-            if hasattr(problem, "_current_dt") and callable(problem._current_dt):
-                return problem._current_dt(_k)
-            return cppad_py.a_double(problem.dt)
+        quad_eff = problem.resolve_quad_mode()
 
         # rollout with accumulation
         for k in range(N):
@@ -71,19 +71,23 @@ def make_builders(
                 uk = np.array([au[k]], dtype=object)
             else:
                 uk = np.asarray(au[nu*k : nu*(k+1)], dtype=object)
-            dt_k = _dt_k(k)
+            dt_k = problem.dt_of_segment(k)
             x = problem.integrator(
                 x, uk, dt_k, f,
                 accumulate_cb=acc_cb, t0=t,
-                quad=getattr(problem, "path_quad_mode", quad),
+                quad=quad_eff,
             )
             t = t + dt_k
 
-        # 终端代价
+        # 终端代价（允许 Phi 是一个"按情况返回 None"的函数，模板即如此写法）
         if Phi is not None:
             Phi_val = Phi(x, atheta)
-            J = J + Phi_val
+            if Phi_val is not None:
+                J = J + Phi_val
 
         return np.array([J], dtype=object)
 
+    # 把 quad 挂在函数上，供 OCPProblem.resolve_quad_mode 读取，使目标与约束
+    # tape 共用同一模式（早期版本里这个参数被 path_quad_mode 无条件覆盖而失效）。
+    objective_builder.quad = quad
     return objective_builder

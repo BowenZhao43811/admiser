@@ -28,8 +28,14 @@ def build_ad_tapes(Utheta_template, problem):
       - eq_ad        : d_fun(az) -> G(z)  (可能为 None/空)
       - ineq_ad      : d_fun(az) -> C(z)  (可能为 None/空)
     """
+    problem.validate()
+
     nuN = problem.N * problem.nu
     has_params = problem.has_params()
+
+    # 目标与约束必须用同一套求积模式，否则 SLSQP 看到的目标与约束建立在
+    # 不同的离散化上，KKT 点没有意义。
+    quad_eff = problem.resolve_quad_mode()
 
     # ---------- 目标 ----------
     az_obj = cppad_py.independent(Utheta_template)
@@ -60,23 +66,19 @@ def build_ad_tapes(Utheta_template, problem):
 
         t = cppad_py.a_double(0.0)
 
-        def _dt_k(_k):
-            # 预留 CPET 接口（如未实现，使用常数 dt）
-            return cppad_py.a_double(problem.dt)
-
         f = _bind_dyn_with_theta_ad(problem.dyn, ath)
 
         # 积分类累加器
         eq_int_acc    = [cppad_py.a_double(0.0) for _ in problem.int_eq_specs]
         path_eq_acc   = [cppad_py.a_double(0.0) for _ in problem.path_eq_specs]
 
-        def acc_cb(t_sub, x_sub, u_sub, h_sub):
-            h_ad = h_sub if isinstance(h_sub, cppad_py.a_double) else cppad_py.a_double(float(h_sub))
+        def acc_cb(t_sub, x_sub, u_sub, w_sub):
+            w_ad = w_sub if isinstance(w_sub, cppad_py.a_double) else cppad_py.a_double(float(w_sub))
             _t   = t_sub if (t_sub is not None) else t
             # 积分等式
             for i, spec in enumerate(problem.int_eq_specs):
                 q = spec["qfun"](_t, x_sub, u_sub, ath)
-                eq_int_acc[i] = eq_int_acc[i] + h_ad * q
+                eq_int_acc[i] = eq_int_acc[i] + w_ad * q
             # 路径等式：\int h^2 dt 或 \int smooth|h| dt
             for j, spec in enumerate(problem.path_eq_specs):
                 h = spec["hfun"](_t, x_sub, u_sub, ath)
@@ -84,17 +86,17 @@ def build_ad_tapes(Utheta_template, problem):
                     integrand = h * h
                 else:
                     integrand = smooth_abs(h, spec["eps_abs"])
-                path_eq_acc[j] = path_eq_acc[j] + h_ad * integrand
+                path_eq_acc[j] = path_eq_acc[j] + w_ad * integrand
 
         # rollout
         for k in range(problem.N):
             uk = (np.array([au[k]], dtype=object) if problem.nu == 1
                   else np.asarray(au[problem.nu*k : problem.nu*(k+1)], dtype=object))
-            dt_k = _dt_k(k)
+            dt_k = problem.dt_of_segment(k)
             x = problem.integrator(
                 x, uk, dt_k, f,
                 accumulate_cb=acc_cb, t0=t,
-                quad=getattr(problem, "path_quad_mode", "rk4-mid"),
+                quad=quad_eff,
             )
             t = t + dt_k
 
@@ -144,35 +146,32 @@ def build_ad_tapes(Utheta_template, problem):
 
         t = cppad_py.a_double(0.0)
 
-        def _dt_k(_k):
-            return cppad_py.a_double(problem.dt)
-
         f = _bind_dyn_with_theta_ad(problem.dyn, ath)
 
         ineq_int_acc = [cppad_py.a_double(0.0) for _ in problem.int_ineq_specs]
         path_ineq_acc= [cppad_py.a_double(0.0) for _ in problem.path_ineq_specs]
 
-        def acc_cb(t_sub, x_sub, u_sub, h_sub):
-            h_ad = h_sub if isinstance(h_sub, cppad_py.a_double) else cppad_py.a_double(float(h_sub))
+        def acc_cb(t_sub, x_sub, u_sub, w_sub):
+            w_ad = w_sub if isinstance(w_sub, cppad_py.a_double) else cppad_py.a_double(float(w_sub))
             _t   = t_sub if (t_sub is not None) else t
             # 积分不等式
             for i, spec in enumerate(problem.int_ineq_specs):
                 q = spec["qfun"](_t, x_sub, u_sub, ath)
-                ineq_int_acc[i] = ineq_int_acc[i] + h_ad * q
+                ineq_int_acc[i] = ineq_int_acc[i] + w_ad * q
             # 路径不等式转译
             for j, spec in enumerate(problem.path_ineq_specs):
                 h = spec["hfun"](_t, x_sub, u_sub, ath)
-                path_ineq_acc[j] = path_ineq_acc[j] + h_ad * L_eps(h, spec["eps"])
+                path_ineq_acc[j] = path_ineq_acc[j] + w_ad * L_eps(h, spec["eps"])
 
         # rollout
         for k in range(problem.N):
             uk = (np.array([au[k]], dtype=object) if problem.nu == 1
                   else np.asarray(au[problem.nu*k : problem.nu*(k+1)], dtype=object))
-            dt_k = _dt_k(k)
+            dt_k = problem.dt_of_segment(k)
             x = problem.integrator(
                 x, uk, dt_k, f,
                 accumulate_cb=acc_cb, t0=t,
-                quad=getattr(problem, "path_quad_mode", "rk4-mid"),
+                quad=quad_eff,
             )
             t = t + dt_k
 
