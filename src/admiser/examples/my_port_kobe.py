@@ -88,43 +88,25 @@ def h4(t_ad, x_ad, u_ad, atheta):  # x5 >= -1.0
 
 PATH_INEQS = (h1, h2, h3, h4)
 
-# ===== 两种求解模式各自的转译参数 =====
-# 单次求解（原版）：平滑宽度 ε 与 CQ 余量 γ 都固定
-EPS_SINGLE, GAMMA_SINGLE = 1e-2, 1e-3
-# 续贯求解：ε 从 EPS_START 逐轮缩到 EPS_FINAL（= 原版的 ε），γ 自动取 T·ε/4。
-# 四条约束共用同一组 ε/γ，续贯时一起收缩。
-EPS_START, EPS_FINAL = 1e0, 1e-2
+problem = OCPProblem(
+    N=N, dt=dt,
+    x0=x0,
+    dyn=dyn, integrator=substepped_rk4,
+    nu=nu, nx=nx,
+    objective_builder=objective_builder,
+    control_bounds_builder=control_bounds_builder,
+    ntheta=0, theta0=None, param_bounds_builder=None,
+)
+problem.quad_scheme = 'rk4'
+problem.add_terminal_eq(terminal_eq_psi)
 
+# 四条路径约束共用同一个 ε。省略 gamma 即按 γ = T·ε/4 自动取值，
+# 并在续贯模式下随 ε 同步收缩。
+for _h in PATH_INEQS:
+    problem.add_path_ineq(_h, eps=1e-2)
 
-def build_problem(continuation: bool = False) -> OCPProblem:
-    """
-    continuation=False：原版，γ 固定，配 OCPSolver.solve()
-    continuation=True ：续贯版，省略 γ 使其自动跟随 ε，配 OCPSolver.solve_transcription()
+# ===== 求解模式：写在这里，求解端只管调 OCPSolver(problem).solve() =====
+# ε 视为终点，按 1e0 → 1e-1 → 1e-2 逐轮热启动求解（四条约束一起收缩）
+problem.set_transcription(mode="continuation", n_rounds=3, shrink=0.1)
 
-    每次调用都返回一个全新的 problem。续贯求解会就地修改 ε/γ，所以想重跑时
-    请重新 build_problem()，不要复用已经跑过的对象。
-    """
-    p = OCPProblem(
-        N=N, dt=dt,
-        x0=x0,
-        dyn=dyn, integrator=substepped_rk4,
-        nu=nu, nx=nx,
-        objective_builder=objective_builder,
-        control_bounds_builder=control_bounds_builder,
-        ntheta=0, theta0=None, param_bounds_builder=None,
-    )
-    p.quad_scheme = 'rk4'
-    p.add_terminal_eq(terminal_eq_psi)
-    for hh in PATH_INEQS:
-        if continuation:
-            p.add_path_ineq(hh, eps=EPS_START)
-        else:
-            p.add_path_ineq(hh, eps=EPS_SINGLE, gamma=GAMMA_SINGLE)
-    return p
-
-
-problem              = build_problem()                   # 原版
-problem_continuation = build_problem(continuation=True)   # 续贯版
-
-__all__ = ["problem", "problem_continuation", "build_problem",
-           "T", "N", "dt", "PATH_INEQS", "EPS_START", "EPS_FINAL"]
+__all__ = ["problem", "T", "N", "dt", "PATH_INEQS"]

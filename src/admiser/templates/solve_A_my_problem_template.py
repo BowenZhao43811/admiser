@@ -7,8 +7,9 @@ from admiser import OCPSolver
 from my_A_problem_temeplate import problem, N, dt
 
 def main():
-    solver = OCPSolver(problem).build()
-    res = solver.solve(maxiter=2000, ftol=1e-9, disp=True)
+    # 唯一的求解入口。单次还是 ε→0 续贯，由问题文件里的
+    # problem.set_transcription(...) 决定，这里不必区分。
+    res = OCPSolver(problem).solve(maxiter=2000, ftol=1e-9)
 
     U_opt  = res["U_opt"]                # shape = (N*nu,)
     theta  = res.get("theta_opt", None)
@@ -29,6 +30,10 @@ def main():
         print("ineq residual:", in_res)
     if viol is not None:
         print("max h(t) per path constraint:", viol)
+    if len(res.get("rounds", [])) > 1:          # 续贯模式下逐轮的 ε/γ 与违反量
+        for i, r in enumerate(res["rounds"]):
+            print(f"  [{i+1}] eps={min(r['eps']):.1e}  gamma={min(r['gamma']):.3e}  "
+                  f"J={r['J_opt']:+.10g}  max h(t)={r['max_path_viol']:+.3e}")
 
     # 状态
     plt.figure()

@@ -134,5 +134,14 @@ problem.add_path_ineq(hfun=h_ineq, eps=1e-2)
 # def phi_T(xT_ad, th): return xT_ad[0] - 0.5
 # problem.add_terminal_ineq(phi=phi_T, sense="<=")
 
-# ============= 10) 模板导出 =============
+# ============= 10) 求解模式（写在问题里，求解端只管调 solve()）=============
+# mode="single"（默认，可不写这一句）
+#     用上面 add_path_ineq 登记的 ε/γ 直接解一次。
+# mode="continuation"
+#     ε→0 续贯：登记的 ε 视为**终点**，实际从 ε/shrink^(n_rounds-1) 起逐轮收缩，
+#     每轮用上一轮的解热启动。ε 大时光滑好解但约束松，ε 小时逼近真实约束但趋近
+#     不可微，续贯兼顾两者。下例 ε 依次取 1e1 → 1e0 → 1e-1 → 1e-2。
+problem.set_transcription(mode="continuation", n_rounds=4, shrink=0.1)
+
+# ============= 11) 模板导出 =============
 __all__ = ["problem", "N", "dt"]

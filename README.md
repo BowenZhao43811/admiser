@@ -160,9 +160,17 @@ Then solve from a small driver script.
 ```py
 from admiser import OCPSolver
 
-res = OCPSolver(problem).build().solve(maxiter=800, ftol=1e-9, disp=True)
+res = OCPSolver(problem).solve(maxiter=800, ftol=1e-9)
 print(res["J_opt"])
 ```
+
+> ℹ️ **`solve()` is the only solve entry point.** Whether the path-constraint transcription is solved once or by an ε→0 continuation is declared *in the problem*, with `problem.set_transcription(...)` — see [Choosing ε and γ](#choosing-ε-and-γ). The result dict has the same shape either way.
+>
+> If you want the transcribed NLP *without* solving it — to check the AD gradient against finite differences, say — use `to_nlp()`:
+> ```py
+> nlp = OCPSolver(problem).to_nlp()      # records the AD tape, runs no optimizer
+> g_ad = nlp.objective_grad(z)
+> ```
 
 > ℹ️ **Figure Output**: States and control trajectories ploting is not integrated into the solver, instead, the flaxibility is given to the users. User can access raw optimization reaults of control, system parameters, objective, state, residual on the cononical equality and inequalities by 
 `res["U_opt"]`
@@ -219,24 +227,34 @@ $$\int_0^T L_ε(h(t))\,dt \le γ .$$
 
 ### ε-continuation
 
-Small $ε$ gives a tight approximation but a nearly nonsmooth NLP; large $ε$ is smooth but loose. The standard remedy is to start large and shrink, warm-starting each solve:
+Small ε gives a tight approximation but a nearly nonsmooth NLP; large ε is smooth but loose. The standard remedy is to start large and shrink, warm-starting each solve. Declare it **in the problem definition** — the solving side never has to know:
 
 ```py
-res = OCPSolver(problem).solve_transcription(
-    eps0=1e-1, eps_min=1e-4, shrink=0.1, maxiter=500, ftol=1e-10)
+# in my_problem.py, next to the constraint it governs
+problem.add_path_ineq(hfun=hfun, eps=1e-4)      # eps is the *final* value; gamma auto = Teps/4
+problem.set_transcription(mode="continuation", n_rounds=4, shrink=0.1)
+```
 
-for h in res["continuation"]:
-    print(h["eps"], h["gamma"], h["J_opt"], h["max_path_viol"], h["status"])
+```py
+# in the driver — unchanged, whichever mode the problem declared
+res = OCPSolver(problem).solve(maxiter=1000, ftol=1e-12)
+
+for r in res["rounds"]:
+    print(r["eps"], r["gamma"], r["J_opt"], r["max_path_viol"], r["status"])
 ```
 
 ```
-[ADMISER] eps=1.000e-01  J=+0.14636838  max h(t)=+7.971e-02  status=0 nit=84
-[ADMISER] eps=1.000e-02  J=+0.16762905  max h(t)=+7.617e-03  status=0 nit=84
-[ADMISER] eps=1.000e-03  J=+0.17008015  max h(t)=+9.485e-06  status=0 nit=83
-[ADMISER] eps=1.000e-04  J=+0.17042905  max h(t)=-6.010e-04  status=0 nit=71
+[ADMISER] 第 1/4 轮  eps=1.000e-01  J=+0.14636838  max h(t)=+7.975e-02  status=0  nit=95
+[ADMISER] 第 2/4 轮  eps=1.000e-02  J=+0.167629    max h(t)=+7.649e-03  status=0  nit=106
+[ADMISER] 第 3/4 轮  eps=1.000e-03  J=+0.1700801   max h(t)=+1.144e-05  status=0  nit=131
+[ADMISER] 第 4/4 轮  eps=1.000e-04  J=+0.17042904  max h(t)=-5.965e-04  status=0  nit=107
 ```
 
-`gamma` is re-derived as $Tε/4$ each round for constraints registered without an explicit `gamma`; an explicitly given `gamma` is left alone. `eps` is baked into the tape as a constant, so each round rebuilds the tape (cheap relative to the SQP iterations).
+The starting ε is given as a **ratio**, not an absolute value: ε carries the units of its own `h`, so several path constraints cannot share one absolute start — but they can share a shrink ratio. Each constraint runs `eps/shrink^(n_rounds-1) → … → eps`, landing exactly on its registered value in the final round.
+
+`mode="single"` (the default, and what you get if you never call `set_transcription`) is simply the one-round case, so both modes go through the same code path and return the same result shape — `rounds` just has length 1. `gamma` is re-derived as $Tε/4$ each round for constraints registered without an explicit `gamma`; an explicitly given `gamma` stays fixed. `eps` is baked into the tape as a constant, so each round re-records the tape (cheap relative to the SQP iterations).
+
+`solve()` never mutates the problem: ε is only scaled inside the round and restored afterwards, so the same `problem` can be solved repeatedly with identical results.
 
 ## Quadrature Accuracy
 

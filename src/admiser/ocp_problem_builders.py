@@ -1,4 +1,6 @@
 # ocp_problem.py
+from contextlib import contextmanager
+
 import numpy as np
 import cppad_py
 
@@ -82,6 +84,91 @@ class OCPProblem:
         # None = 未指定，由 objective_builder 自带的 quad 决定（见
         # resolve_quad_scheme）；显式赋值则覆盖之，对目标与全部约束统一生效。
         self.quad_scheme = None
+
+        # 路径约束转译的求解策略，用 set_transcription() 声明
+        self.transcription = dict(mode="single", n_rounds=1, shrink=0.1)
+
+        # ε 的临时调整，仅在求解过程中由 OCPSolver 借助 scaled_eps() 短暂设置，
+        # 结束后必定恢复。登记在 spec["eps"] 里的值永远保持用户写的那个。
+        self._eps_factor = 1.0
+        self._eps_override = None
+
+    # ---------- 转译策略 ----------
+    def set_transcription(self, mode: str = "single", n_rounds: int = 4,
+                          shrink: float = 0.1) -> "OCPProblem":
+        """
+        声明路径不等式转译的求解策略。写在问题定义里，求解端不必再关心。
+
+        mode="single"（默认）
+            直接用 add_path_ineq 登记的 ε/γ 解一次。
+
+        mode="continuation"
+            ε→0 续贯求解。add_path_ineq 登记的 ε 视为**终点**，实际按几何序列
+                ε/shrink^(n_rounds-1), ..., ε/shrink, ε
+            逐轮求解，每轮用上一轮的解热启动，最后一轮正好落在登记值上。
+            γ 若登记为自动（add_path_ineq 未显式给 gamma），每轮按 T·ε/4 同步更新。
+
+            起点用**收缩比例**而不是绝对值给定：ε 带有各自 h 的量纲，多条路径
+            约束不能共用一个绝对起点，但共用一个比例是合理的。
+
+        为什么要续贯：ε 大时 L_ε 光滑、好解但约束松；ε 小时逼近真实约束但趋近
+        不可微的折线，冷启动容易在边界卡死。从大到小逐步逼近兼顾两者。
+        """
+        if mode not in ("single", "continuation"):
+            raise ValueError(f"mode 必须是 'single' 或 'continuation'，收到 {mode!r}")
+        if mode == "continuation":
+            if int(n_rounds) < 1:
+                raise ValueError(f"n_rounds 必须 ≥ 1，收到 {n_rounds}")
+            if not (0.0 < float(shrink) < 1.0):
+                raise ValueError(f"shrink 必须在 (0,1) 内，收到 {shrink}")
+            if not self.path_ineq_specs:
+                raise ValueError(
+                    "问题里没有登记任何路径不等式（add_path_ineq），无需续贯求解；"
+                    "请用 set_transcription(mode='single') 或直接不调用本方法。"
+                )
+        self.transcription = dict(mode=mode,
+                                  n_rounds=1 if mode == "single" else int(n_rounds),
+                                  shrink=float(shrink))
+        return self
+
+    def eps_factors(self) -> list:
+        """
+        每一轮相对于登记 ε 的倍数，**从大到小**，最后一个恒为 1.0（即登记值本身）。
+        single 模式返回 [1.0]；continuation 返回 [(1/s)^(n-1), ..., 1/s, 1.0]。
+        例：n_rounds=4, shrink=0.1, 登记 ε=1e-4 -> ε 依次取 1e-1, 1e-2, 1e-3, 1e-4。
+        """
+        cfg = self.transcription
+        if cfg["mode"] == "single":
+            return [1.0]
+        n, s = cfg["n_rounds"], cfg["shrink"]
+        return [(1.0 / s) ** (n - 1 - k) for k in range(n)]
+
+    @contextmanager
+    def scaled_eps(self, factor: float = 1.0, override: float | None = None):
+        """
+        在 with 块内临时改变各路径约束的有效 ε：override 优先（绝对值），
+        否则按 factor 缩放登记值。退出时无条件恢复，因此 spec["eps"] 永不被改动，
+        同一个 problem 可以被反复求解而不会越跑越偏。
+        """
+        old = (self._eps_factor, self._eps_override)
+        self._eps_factor = float(factor)
+        self._eps_override = None if override is None else float(override)
+        try:
+            yield self
+        finally:
+            self._eps_factor, self._eps_override = old
+
+    def effective_eps(self, spec: dict) -> float:
+        """该路径约束此刻实际生效的 ε。"""
+        if self._eps_override is not None:
+            return self._eps_override
+        return float(spec["eps"]) * self._eps_factor
+
+    def effective_gamma(self, spec: dict) -> float:
+        """该路径约束此刻实际生效的 γ：登记为自动的跟随 ε，显式给定的保持不变。"""
+        if spec.get("gamma_auto", False):
+            return self.auto_gamma(self.effective_eps(spec))
+        return float(spec["gamma"])
 
     # ---------- 求积方案解析 ----------
     def resolve_quad_scheme(self) -> str:

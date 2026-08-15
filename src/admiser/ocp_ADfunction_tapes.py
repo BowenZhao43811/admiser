@@ -158,10 +158,11 @@ def build_ad_tapes(Utheta_template, problem):
             for i, spec in enumerate(problem.int_ineq_specs):
                 q = spec["qfun"](_t, x_sub, u_sub, ath)
                 ineq_int_acc[i] = ineq_int_acc[i] + w_ad * q
-            # 路径不等式转译
+            # 路径不等式转译。ε 取“此刻生效”的值：续贯求解时由
+            # OCPProblem.scaled_eps() 临时缩放，登记值本身不被改动。
             for j, spec in enumerate(problem.path_ineq_specs):
                 h = spec["hfun"](_t, x_sub, u_sub, ath)
-                path_ineq_acc[j] = path_ineq_acc[j] + w_ad * L_eps(h, spec["eps"])
+                path_ineq_acc[j] = path_ineq_acc[j] + w_ad * L_eps(h, problem.effective_eps(spec))
 
         # rollout
         for k in range(problem.N):
@@ -200,7 +201,7 @@ def build_ad_tapes(Utheta_template, problem):
 
         # 路径不等式：gamma - \int L_eps ≥ 0
         for j, spec in enumerate(problem.path_ineq_specs):
-            gamma = cppad_py.a_double(spec["gamma"])
+            gamma = cppad_py.a_double(problem.effective_gamma(spec))
             C.append(gamma - path_ineq_acc[j])
 
         C_arr = np.asarray(C, dtype=object)
