@@ -50,7 +50,7 @@ _ret = make_builders(
     dyn=dyn_with_policy,
     L=L,
     Phi=Phi,
-    quad='rk4-mid',         # 子步采样点（mid 更稳）
+    quad='rk4',         # 与状态同为 4 阶的求积
 )
 objective_builder = _ret[0] if isinstance(_ret, tuple) else _ret
 
@@ -74,6 +74,6 @@ problem = OCPProblem(
 )
 
 # 统一：子步积分采样模式
-problem.path_quad_mode = 'rk4-mid'
+problem.path_quad_mode = 'rk4'
 
 __all__ = ["problem", "N", "dt", "T"]

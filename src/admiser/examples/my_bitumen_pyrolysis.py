@@ -56,7 +56,7 @@ objective_builder= make_builders(
     dyn=dyn,
     L=L,         # 可为 None
     Phi=Phi,     # 可为 None
-    quad='rk4-mid',
+    quad='rk4',
 )
 
 # ================== 5) 控制盒约束 ==================
@@ -84,7 +84,7 @@ problem = OCPProblem(
     # theta0=...,
     # param_bounds_builder=...,
 )
-problem.path_quad_mode = 'rk4-mid'
+problem.path_quad_mode = 'rk4'
 
 # ================== 8) 在此统一注册约束（canonical constraints） ==================
 # 终端等式（如果需要 x(T)=xT）：

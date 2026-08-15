@@ -37,7 +37,7 @@ def Phi(xT_ad, theta):
     return xT_ad[2]  # x3(T)
 
 # 兼容 make_builders 返回 1 或 2 个对象
-_ret = make_builders(dyn=dyn, L=L, Phi=Phi, quad='rk4-mid')
+_ret = make_builders(dyn=dyn, L=L, Phi=Phi, quad='rk4')
 objective_builder = _ret[0] if isinstance(_ret, tuple) else _ret
 
 # ===== 控制盒约束 =====
@@ -63,7 +63,7 @@ problem = OCPProblem(
     control_bounds_builder=control_bounds_builder,
     ntheta=0,
 )
-problem.path_quad_mode = 'rk4-mid'
+problem.path_quad_mode = 'rk4'
 
 # 终端等式：x1(T)=1.25, x2(T)=1.0 （x3 终端自由）
 def terminal_eq_psi(xT_ad, theta):

@@ -30,7 +30,7 @@ def dyn(x, u, atheta):
 def Phi(xT_ad, atheta):
     return -atheta[0]
 
-objective_builder= make_builders(dyn=dyn, L=None, Phi=Phi, quad='rk4-mid')
+objective_builder= make_builders(dyn=dyn, L=None, Phi=Phi, quad='rk4')
 
 # 初值依赖 θ：x1(0)=0, x2(0)=1, x3(0)=z2
 def x0_from_theta_ad(atheta, problem):
@@ -61,7 +61,7 @@ problem = OCPProblem(
     x0_from_theta_ad=x0_from_theta_ad,
     x0_from_theta_numeric=x0_from_theta_numeric,
 )
-problem.path_quad_mode = 'rk4-mid'
+problem.path_quad_mode = 'rk4'
 
 # 终端等式：x1(1)=0
 problem.add_terminal_eq(lambda xT, th: xT[0])

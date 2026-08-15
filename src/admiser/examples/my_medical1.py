@@ -41,6 +41,13 @@ lam2 = 0.01
 q1 = 1.0; q2 = 1.0; q3 = 1.0
 beta1 = 1; beta2 = 3
 
+# 目标函数缩放因子。细胞数量级在 1e5~1e6，未缩放时 J ≈ 2.5e6，而 SLSQP 的 ftol
+# 是作用在目标**绝对**变化量上的：2.5e6 上的 1e-9 相当于 4e-16 的相对精度，已在
+# 机器精度以下，于是线搜索一开步就"无法改进"而提前退出（status=8，nit≈5，且结果
+# 随初猜/求积方式剧烈跳动）。缩放到 O(1) 后同一个问题能稳定收敛到 nit≈350。
+# 注意：正的常数缩放不改变最优解，只改变 J 的报数单位。
+J_SCALE = 1e-6
+
 # 预算上限（∫ (u+v) dt ≤ c）
 budget_c = 20.0
 
@@ -95,8 +102,8 @@ def dyn(x, u, theta=None):
 
 # ================= 5) 目标函数 =================
 def L(t, x, u, theta):
-    """q₁S₁ + q₂S₂ + q₃S₃ + β₁u + β₂v"""
-    return (q1*x[0]) + (q2*x[1]) + (q3*x[2]) + (beta1*u[0]) + (beta2*u[1])
+    """J_SCALE * (q₁S₁ + q₂S₂ + q₃S₃ + β₁u + β₂v)；J 的单位因此是 1e6"""
+    return J_SCALE * ((q1*x[0]) + (q2*x[1]) + (q3*x[2]) + (beta1*u[0]) + (beta2*u[1]))
 
 Phi = None  # 无终端代价
 
@@ -105,7 +112,7 @@ objective_builder= make_builders(
     dyn=dyn,
     L=L,
     Phi=Phi,
-    quad='rk4-mid',
+    quad='rk4',
 )
 
 # ================= 6) 控制盒约束 =================
@@ -129,14 +136,17 @@ problem = OCPProblem(
     control_bounds_builder=control_bounds_builder,
     ntheta=0, theta0=None, param_bounds_builder=None,
 )
-problem.path_quad_mode = 'rk4-mid'  # 子步积分采样点
+problem.path_quad_mode = 'rk4'  # 子步积分采样点
 
 # ================= 8) 约束注册（canonical） =================
 # 8.1 路径不等式（转译）：N(t) - 0.75 K4 ≥ 0  <=>  0.75*K4 - N(t) ≤ 0
 def h_N_floor(t, x, u, theta):
     return 0.75 * K4 - x[3]  # x[3] = N
-eps0, gamma0 = 1e-3, 1e-8
-problem.add_path_ineq(hfun=h_N_floor, eps=eps0, gamma=gamma0)
+# ε 是**有量纲**的：它是 h 的光滑化半宽，必须按 h 自身的量级取。这里 h 的量级是
+# 1e5~1e6，取 ε=1e-3 相当于把 hinge 光滑化到相对宽度 1e-9，等于退化成不可微的
+# 硬 hinge。取 ε = 1e-3 * |h| 的典型量级 ≈ 1e3；γ 省略即按 T·ε/4 自动配套。
+eps0 = 1e-3 * K4
+problem.add_path_ineq(hfun=h_N_floor, eps=eps0)
 
 # 8.2 预算：∫ (u+v) dt ≤ budget_c
 def q_budget(t, x, u, theta):

@@ -52,7 +52,7 @@ Phi = None  # 无终端代价
 # 由模板生成 objective_builder（内部在多子步 RK4 中精确积分 ∫L·dt）
 _ret = make_builders(
     dyn=dyn, L=L, Phi=Phi,
-    quad='rk4-mid',    # 子步采样为中点，数值更稳
+    quad='rk4',    # 与状态同为 4 阶的求积
 )
 objective_builder = _ret if callable(_ret) else _ret[0]
 constraint_builder = None  # 约束统一用 canonical API 注册
@@ -81,7 +81,7 @@ problem = OCPProblem(
     control_bounds_builder=control_bounds_builder,
     ntheta=0, theta0=None, param_bounds_builder=None,
 )
-problem.path_quad_mode = 'rk4-mid'
+problem.path_quad_mode = 'rk4'
 
 # ====== 注册约束（canonical API）======
 # 1) 路径不等式：I(t) ≤ I_cap  →  h = I - I_cap ≤ 0 → ∫ L_eps(h) dt ≤ γ

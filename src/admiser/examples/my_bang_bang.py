@@ -37,7 +37,7 @@ objective_builder = make_builders(
     dyn=dyn,
     L=L,
     Phi=None,
-    quad='rk4-mid',
+    quad='rk4',
 )
 
 # --- 控制盒约束 ---
@@ -58,6 +58,6 @@ problem = OCPProblem(
 )
 
 # 采样位置（子步中点）
-problem.path_quad_mode = 'rk4-mid'
+problem.path_quad_mode = 'rk4'
 
 __all__ = ["problem", "N", "dt"]

@@ -45,7 +45,7 @@ def Phi(xT_ad, atheta):
     return -z2
 
 # 目标 builder（只构建 ∫L + Φ；这里 L=None, 仅终端代价）
-objective_builder= make_builders(dyn=dyn, L=None, Phi=Phi, quad='rk4-mid')
+objective_builder= make_builders(dyn=dyn, L=None, Phi=Phi, quad='rk4')
 
 # ---- 盒约束 ----
 def control_bounds_builder(problem: OCPProblem):
@@ -72,7 +72,7 @@ problem = OCPProblem(
     x0_from_theta_ad=x0_from_theta_ad,
     x0_from_theta_numeric=x0_from_theta_numeric,
 )
-problem.path_quad_mode = 'rk4-mid'
+problem.path_quad_mode = 'rk4'
 
 # 终端等式：x(T) = θ
 def terminal_eq_psi(xT_ad, atheta):

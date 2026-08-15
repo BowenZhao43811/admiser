@@ -45,7 +45,7 @@ objective_builder= make_builders(
     dyn=dyn,
     L=L,
     Phi=Phi,
-    quad='rk4-mid',   # 子步采样位置；与 integrator 一致
+    quad='rk4',   # 子步采样位置；与 integrator 一致
 )
 
 # ===== 控制盒约束 =====
@@ -67,7 +67,7 @@ problem = OCPProblem(
     control_bounds_builder=control_bounds_builder,
     ntheta=0, theta0=None, param_bounds_builder=None,
 )
-problem.path_quad_mode = "rk4-mid"
+problem.path_quad_mode = "rk4"
 
 # ===== 路径不等式：h(t,x,u) = -8*(t-0.5)^2 + 0.5 + x2(t) ≤ 0 =====
 # 等价于 x2(t) ≤ 8*(t-0.5)^2 - 0.5

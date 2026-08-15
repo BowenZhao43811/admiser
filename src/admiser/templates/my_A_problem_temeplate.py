@@ -48,7 +48,7 @@ objective_builder = make_builders(
     dyn=dyn,
     L=L,           # 可为 None
     Phi=Phi,       # 可为 None
-    quad='rk4-mid' # 子步采样位置
+    quad='rk4' # 子步求积模式
 )
 
 # ============= 5) 可选：初值依赖 θ（x0 = x0(θ)） =============
@@ -96,9 +96,12 @@ problem = OCPProblem(
     x0_from_theta_ad=x0_from_theta_ad if ntheta > 0 else None,
     x0_from_theta_numeric=x0_from_theta_numeric if ntheta > 0 else None,
 )
-problem.path_quad_mode = 'rk4-mid'
+problem.path_quad_mode = 'rk4'
 
-# ============= 9) 约束注册（按需启用，示例给出几类常见形式） =============
+# ============= 9) 约束注册 =============
+# ⚠️ 下面六类是一份"菜单"，彼此**不是**同时可行的（例如 9.1 要求 x1(T)=1，
+#    而 9.6 要求 x1(T)≤0.5）。本模板默认只启用 9.1 + 9.4 + 9.5 这一组自洽的
+#    约束，其余以注释形式保留写法。按你自己的问题取用，别一次全打开。
 
 # 9.1 终端等式：x(T) = xT
 def terminal_eq_psi(xT_ad, atheta):
@@ -107,26 +110,29 @@ def terminal_eq_psi(xT_ad, atheta):
 problem.add_terminal_eq(terminal_eq_psi)
 
 # 9.2 积分等式：∫ q(t,x,u,θ) dt = target
-def q_int(t, x, u, th): return x[0]  # 示例
-problem.add_integral_eq(qfun=q_int, target=1.0)
+# def q_int(t, x, u, th): return x[0]
+# problem.add_integral_eq(qfun=q_int, target=1.0)
 
 # 9.3 路径等式：h(t,x,u,θ) = 0
 # - L2 模式：∫ h^2 dt = 0（推荐）
-# - abs 模式：∫ smooth_abs_eps(h) dt = 0
-def h_eq(t, x, u, th): return x[1]   # 示例
-problem.add_path_eq(hfun=h_eq, mode="L2", eps_abs=1e-6)
+# - abs 模式：∫ smooth_abs_eps(h) dt = 0，eps_abs 会被 solve_transcription 一并收缩
+# def h_eq(t, x, u, th): return x[1]
+# problem.add_path_eq(hfun=h_eq, mode="L2", eps_abs=1e-6)
 
 # 9.4 积分不等式：∫ q dt ≤/≥ bound
-def q_budget(t, x, u, th): return u[0]*u[0]   # 示例
-problem.add_integral_ineq(qfun=q_budget, bound=5.0, sense="<=")
+def q_budget(t, x, u, th): return u[0]*u[0]   # 示例：控制能量预算
+problem.add_integral_ineq(qfun=q_budget, bound=50.0, sense="<=")
 
 # 9.5 路径不等式（约束转译）：h(t,x,u,θ) ≤ 0  →  ∫ L_eps(h) dt ≤ γ
-def h_ineq(t, x, u, th): return x[0] - 0.5
-problem.add_path_ineq(hfun=h_ineq, eps=1e-3, gamma=0.0)
+# gamma 省略即按 γ = T·ε/4 自动取值（与 ε 相容的取法，见 OCPProblem.auto_gamma）。
+# 切勿写 gamma=0.0：那等价于强制 h(t) ≤ -ε（严格内点），既保守又难收敛。
+# ε 是**有量纲**的，要按 h 自身的量级取；不确定时用 solve_transcription 从大到小续贯。
+def h_ineq(t, x, u, th): return x[1] - 3.0   # 示例：|x2| 不超过 3
+problem.add_path_ineq(hfun=h_ineq, eps=1e-2)
 
 # 9.6 终端不等式：φ(xT,θ) ≤ 0 或 ≥ 0
-def phi_T(xT_ad, th): return xT_ad[0] - 0.5
-problem.add_terminal_ineq(phi=phi_T, sense="<=")
+# def phi_T(xT_ad, th): return xT_ad[0] - 0.5
+# problem.add_terminal_ineq(phi=phi_T, sense="<=")
 
 # ============= 10) 模板导出 =============
 __all__ = ["problem", "N", "dt"]

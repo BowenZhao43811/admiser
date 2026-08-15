@@ -50,7 +50,7 @@ objective_builder= make_builders(
     dyn=dyn,
     L=L,
     Phi=None,
-    quad='rk4-mid',   # 你的 integrator 已支持子步采样位置
+    quad='rk4',   # 你的 integrator 已支持子步采样位置
 )
 
 # ---------------- 盒约束 ----------------
@@ -83,7 +83,7 @@ problem = OCPProblem(
     # theta0=theta0,
     # param_bounds_builder=param_bounds_builder,
 )
-problem.path_quad_mode = 'rk4-mid'
+problem.path_quad_mode = 'rk4'
 
 # ---- 终端等式：x(T) - xT = 0  （用 canonical API 注册）----
 def terminal_eq_psi(xT_ad, atheta):

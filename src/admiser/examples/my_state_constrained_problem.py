@@ -24,7 +24,7 @@ def dyn(x, u, theta=None):
 def L(t, x, u, theta):
     return (x[0]*x[0]) + (x[1]*x[1]) + 0.005*(u[0]*u[0])
 
-objective_builder= make_builders(dyn=dyn, L=L, Phi=None, quad='rk4-mid')
+objective_builder= make_builders(dyn=dyn, L=L, Phi=None, quad='rk4')
 
 def control_bounds_builder(problem: OCPProblem):
     return [(-20.0, 20.0)] * (problem.N * problem.nu)
@@ -40,7 +40,7 @@ problem = OCPProblem(
     control_bounds_builder=control_bounds_builder,
     ntheta=0,
 )
-problem.path_quad_mode = 'rk4-mid'
+problem.path_quad_mode = 'rk4'
 
 # 路径不等式：h(t) ≤ 0
 def hfun(t, x, u, th):

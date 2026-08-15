@@ -49,7 +49,7 @@ objective_builder= make_builders(
     dyn=dyn,
     L=L,
     Phi=None,
-    quad='rk4-mid',
+    quad='rk4',
 )
 
 # ========== 控制盒约束 ==========
@@ -73,7 +73,7 @@ problem = OCPProblem(
     control_bounds_builder=control_bounds_builder,
     ntheta=0, theta0=None, param_bounds_builder=None,
 )
-problem.path_quad_mode = "rk4-mid"
+problem.path_quad_mode = "rk4"
 
 # ---- 终端等式：x(T) - xT = 0（用 canonical API 注册）----
 def terminal_eq_psi(xT_ad, atheta):

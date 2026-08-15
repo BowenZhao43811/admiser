@@ -42,7 +42,7 @@ objective_builder= make_builders(
     dyn=dyn,
     L=L,         # None/无效返回 => 仅终端代价
     Phi=Phi,
-    quad='rk4-mid',
+    quad='rk4',
 )
 
 # ===== 控制盒约束 =====
@@ -67,7 +67,7 @@ problem = OCPProblem(
     control_bounds_builder=control_bounds_builder,
     ntheta=0,
 )
-problem.path_quad_mode = 'rk4-mid'
+problem.path_quad_mode = 'rk4'
 
 # 终端等式：x2(T)=0, x3(T)=0
 def terminal_eq_psi(xT_ad, theta):

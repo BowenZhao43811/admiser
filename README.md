@@ -4,9 +4,9 @@ ADMISER is a **Numerical Optimal Control** toolkit that incorporates **Automatic
 
 
 - ✅ **Control Parametrization** (piecewise-constant controls; policy/feedback parametrization)
-- ✅ **Constraint Transcription** (smooth path inequalities → canonical integral constraints)
+- ✅ **Constraint Transcription** (smooth path inequalities → canonical integral constraints), with an ε→0 **continuation loop**
 - ✅ **Canonical constraints**: terminal eq/ineq, integral eq/ineq, path eq/ineq (smoothed)
-- ✅ **Multi-substep RK4** integrator with substep quadrature callbacks
+- ✅ **Multi-substep RK4** integrator with **4th-order** substep quadrature (cost integrals are as accurate as the state trajectory, at no extra dynamics evaluations)
 - ✅ **System Parameters** are simultaneously optimized within the same framework (if have)
 - ✅ **Automatic Differentiation** via `cppad_py` tapes (objective + constraints Jacobians)
 - ✅ **SQP** method for solving nonlinear programming problem
@@ -21,6 +21,9 @@ ADMISER is a **Numerical Optimal Control** toolkit that incorporates **Automatic
 - [Core Ideas](#core-ideas)
 - [Problem Template](#problem-template)
 - [Registering Constraints](#registering-constraints)
+- [Choosing ε and γ](#choosing-ε-and-γ)
+- [Quadrature Accuracy](#quadrature-accuracy)
+- [Writing AD-safe Model Functions](#writing-ad-safe-model-functions)
 - [Free Terminal Time Transforme](#free-terminal-time)
 - [Cite / Acknowledge](#cite--acknowledge)
 
@@ -75,7 +78,7 @@ From the repository root:
 ```sh
 pip install "admiser @ git+https://github.com/BowenZhao43811/admiser.git"
 ```
-> ⚠️ **Python version requirement**: Python ≥ 3.10
+> ⚠️ **Python version requirement**: Python ≥ 3.10 (enforced by `requires-python`)
 
 > ⚠️**Dependencies** `numpy`, `scipy`, `matplotlib`, `cppad_py` (Auto installations are provided in the next subsection).
 
@@ -87,10 +90,10 @@ admiser-install-cppad
 
 ## Quickstart
 
-The jupyter notebook document `main_solver.ipynb` distributed together with the package records the solution results of many examples from different industries. Definitions of these example problems can be found in the `admiser.examples.ProblemName.py`
+The jupyter notebook document `main_solver_entrence.ipynb` distributed together with the package records the solution results of many examples from different industries. Definitions of these example problems can be found in the `admiser.examples.ProblemName.py`
 
 ### find the accompanying example solution 
-```sh
+```py
 from admiser.examples import get_notebook_path
 
 path = get_notebook_path()
@@ -103,7 +106,7 @@ Grab the file path then open it with your prefered editor (don't forget to selec
 - **Control Parametrization**: treat controls as decision variables over segments; states propagate by integrating dynamics.
 
 - **Constraint Transcription**: 
-    - *Path inequality* $h(t) ≤ 0$ → smooth hinge $L_ε(h)$; enforce $∫ L_ε(h) dt ≤ γ$ (with $γ ≥ 0$; typically $γ=ε/4$).
+    - *Path inequality* $h(t) ≤ 0$ → smooth hinge $L_ε(h)$; enforce $∫ L_ε(h) dt ≤ γ$ with $γ = Tε/4$ (see [Choosing ε and γ](#choosing-ε-and-γ)).
     - *Path equality* $h(t)=0$ → $∫ h^2 dt = 0$.
 
 - **AD with `cppad_py`**: build AD tapes (computational graph) for the objective $G_0(z)$ and the $i-th$ constraints $G_i(z)$ **once**; obtain function value, gradient/Jacobian for `SLSQP`.
@@ -136,7 +139,7 @@ def L(t, x, u, theta):
     return x[0]*x[0] + x[1]*x[1] + 0.25*(u[0]*u[0])
 
 # No terminal cost, no terminal equality, no integral equalities
-objective_builder = make_builders(dyn=dyn, L=L, Phi=None, terminal_eq=None, integral_eqs=None, quad='rk4-mid')
+objective_builder = make_builders(dyn=dyn, L=L, Phi=None, quad='rk4')
 
 # Control bounds
 def control_bounds_builder(p): return [(-10.0, 10.0)] * (p.N * p.nu)
@@ -166,8 +169,12 @@ print(res["J_opt"])
 `res.get("theta_opt", None)`
 `res["J_opt"]`
 `res["X_opt"]`
-`res.get("eq_res", None)`
-`res.get("ineq_res", None)`.
+`res["t_opt"]`
+`res.get("eq_resid", None)`
+`res.get("ineq_resid", None)`
+`res.get("path_viol", None)`.
+
+> ℹ️ `eq_resid` should be ≈ 0, `ineq_resid` is $C(z) \ge 0$, and `path_viol` gives $\max_t h(t)$ on the grid for each registered path inequality — the direct measure of how well the transcription held (should be ≤ 0).
 
 > 😊 However, a chart generator template `solve_A_my_problem_template.py` can be access in `admiser\templates`
 
@@ -194,6 +201,74 @@ User can define and registe following six type of constraints to the package and
 > ℹ️ **Note** Path constraints are transformed into integral form by applying the constraints transcription techniques.
 
 > 😊 Full template for all supported constraints `my_A_problem_temeplate.py` can be found in `admiser\templates`.
+
+## Choosing ε and γ
+
+For a path inequality $h(t) \le 0$, `add_path_ineq(hfun, eps, gamma=None)` enforces
+
+$$\int_0^T L_ε(h(t))\,dt \le γ .$$
+
+**Leave `gamma` unset.** It then defaults to $γ = Tε/4$, which is the value compatible with $ε$:
+
+- $L_ε(h) - \max(h,0) \in [0, ε/4]$, with the maximum attained at $h=0$. So any trajectory that genuinely satisfies $h(t)\le 0$ also satisfies $\int L_ε \,dt \le Tε/4$ — the transcribed problem does **not** exclude the true optimum.
+- Conversely $\int \max(h,0)\,dt \le \int L_ε\,dt \le γ = Tε/4$, so the $L^1$ violation is bounded by $Tε/4$ and vanishes as $ε \to 0$.
+
+> ⚠️ Do **not** use `gamma=0`. Since $L_ε \ge 0$, requiring $\int L_ε\,dt \le 0$ forces $L_ε \equiv 0$, i.e. $h(t) \le -ε$ everywhere — a strictly interior solution, and one that routinely makes SLSQP stall on the constraint boundary.
+
+> ⚠️ **ε carries the units of `h`.** If $h$ ranges over $10^5$, then `eps=1e-3` smooths the hinge over a relative width of $10^{-9}$ — effectively a nondifferentiable hinge. Scale `eps` to the magnitude of your own $h$ (see `admiser/examples/my_medical1.py`).
+
+### ε-continuation
+
+Small $ε$ gives a tight approximation but a nearly nonsmooth NLP; large $ε$ is smooth but loose. The standard remedy is to start large and shrink, warm-starting each solve:
+
+```py
+res = OCPSolver(problem).solve_transcription(
+    eps0=1e-1, eps_min=1e-4, shrink=0.1, maxiter=500, ftol=1e-10)
+
+for h in res["continuation"]:
+    print(h["eps"], h["gamma"], h["J_opt"], h["max_path_viol"], h["status"])
+```
+
+```
+[ADMISER] eps=1.000e-01  J=+0.14636838  max h(t)=+7.971e-02  status=0 nit=84
+[ADMISER] eps=1.000e-02  J=+0.16762905  max h(t)=+7.617e-03  status=0 nit=84
+[ADMISER] eps=1.000e-03  J=+0.17008015  max h(t)=+9.485e-06  status=0 nit=83
+[ADMISER] eps=1.000e-04  J=+0.17042905  max h(t)=-6.010e-04  status=0 nit=71
+```
+
+`gamma` is re-derived as $Tε/4$ each round for constraints registered without an explicit `gamma`; an explicitly given `gamma` is left alone. `eps` is baked into the tape as a constant, so each round rebuilds the tape (cheap relative to the SQP iterations).
+
+## Quadrature Accuracy
+
+The substep quadrature mode is set by `make_builders(quad=...)`, or globally by `problem.path_quad_mode` (which takes precedence, and applies to the objective **and** every integral/path constraint):
+
+| `quad` | sampling | order |
+|---|---|---|
+| `'rk4'` *(default)* | the four RK4 stage points, weights $h/6, h/3, h/3, h/6$ | **4** |
+| `'mid'` / `'rk4-mid'` | Euler half-step midpoint | 2 |
+| `'left'` / `'right'` | substep endpoints | 1 |
+
+`'rk4'` is equivalent to integrating the cost as an augmented state $\dot y = L(t,x,u,θ)$ with the same RK4 tableau, so $\int L\,dt$ is as accurate as the trajectory itself — and it costs **no extra evaluations of `dyn`**, only of `L` (which you must evaluate anyway). On $\dot x = x,\ x(0)=1,\ \int_0^1 x\,dt = e-1$:
+
+```
+quad='mid'  err = 1.68e-02  4.34e-03  1.10e-03  2.77e-04  6.96e-05   → order 2.0
+quad='rk4'  err = 7.19e-05  4.98e-06  3.28e-07  2.10e-08  1.33e-09   → order 4.0
+```
+
+## Writing AD-safe Model Functions
+
+Your `dyn`, `L`, `Phi`, `qfun` and `hfun` are executed **once**, on `a_double` values, to record the tape. Anything that is not a recorded CppAD operation gets frozen at the recording point:
+
+```py
+def dyn(x, u, theta=None):
+    if u[0] > 0:                 # ❌ this branch is decided once, at the taping point,
+        return np.array([u[0]], dtype=object)   #    and silently reused for every z
+    return np.array([-u[0]], dtype=object)
+```
+
+- ❌ Python `if` / `min` / `max` / `abs` / `np.where` on AD values, and `float(...)` casts of them.
+- ✅ `np.exp/sin/cos/sqrt/**` on `a_double` (they dispatch to CppAD operations), and `admiser.L_eps` / `admiser.smooth_abs`, which use `cond_assign` so the comparison is recorded as a real `CondExp` operator and re-evaluated on every pass.
+
 ## Free Terminal Time
 The free-terminal time problem is a special type of optimal control problem, where the objective function is typically to minimize the system's runtime.
 
