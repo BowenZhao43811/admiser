@@ -56,28 +56,49 @@ def control_bounds_builder(problem: OCPProblem):
 # ===== 组装问题（多子步 RK4 提升稳定性） =====
 substepped_rk4 = partial(rk4_substeps, m_sub=20)
 
-problem = OCPProblem(
-    N=N, dt=dt,
-    x0=x0,
-    u0 = u0,
-    dyn=dyn,
-    integrator=substepped_rk4,
-    nu=nu, nx=nx,
-    objective_builder=objective_builder,
-    control_bounds_builder=control_bounds_builder,
-    ntheta=0, theta0=None, param_bounds_builder=None,
-)
-problem.quad_scheme = 'rk4'
-
-# ===== 路径不等式：h(t,x,u) = -8*(t-0.5)^2 + 0.5 + x2(t) ≤ 0 =====
-# 等价于 x2(t) ≤ 8*(t-0.5)^2 - 0.5
+# ===== 混合状态-控制路径不等式：h(t,x,u) = u + x1/6 ≤ 0 =====
 def h(t_ad, x_ad, u_ad, atheta):
     x1, x2 = x_ad
     uu = u_ad[0]
     return uu + 1/6 * x1                   # h<=0 为可行
 
-# 注册路径不等式（Teo 的转译：∫ L_eps(h) dt ≤ γ）
-# 经验：eps 可从 1e-3 起步，gamma 可先设为 0.0；若需要放松，可给一个很小的正数。
-problem.add_path_ineq(h, eps=1e-3, gamma=0.79e-3)
+# ===== 两种求解模式各自的转译参数 =====
+# 单次求解（原版）：ε 与 γ 都固定
+EPS_SINGLE, GAMMA_SINGLE = 1e-3, 0.79e-3
+# 续贯求解：ε 从 EPS_START 逐轮缩到 EPS_FINAL（= 原版的 ε），γ 自动取 T·ε/4
+EPS_START, EPS_FINAL = 1e0, 1e-3
 
-__all__ = ["problem", "N", "dt"]
+
+def build_problem(continuation: bool = False) -> OCPProblem:
+    """
+    continuation=False：原版，γ 固定，配 OCPSolver.solve()
+    continuation=True ：续贯版，省略 γ 使其自动跟随 ε，配 OCPSolver.solve_transcription()
+
+    每次调用都返回一个全新的 problem。续贯求解会就地修改 ε/γ，所以想重跑时
+    请重新 build_problem()，不要复用已经跑过的对象。
+    """
+    p = OCPProblem(
+        N=N, dt=dt,
+        x0=x0,
+        u0 = u0,
+        dyn=dyn,
+        integrator=substepped_rk4,
+        nu=nu, nx=nx,
+        objective_builder=objective_builder,
+        control_bounds_builder=control_bounds_builder,
+        ntheta=0, theta0=None, param_bounds_builder=None,
+    )
+    p.quad_scheme = 'rk4'
+    # 注册路径不等式（Teo 的转译：∫ L_eps(h) dt ≤ γ）
+    if continuation:
+        p.add_path_ineq(h, eps=EPS_START)
+    else:
+        p.add_path_ineq(h, eps=EPS_SINGLE, gamma=GAMMA_SINGLE)
+    return p
+
+
+problem              = build_problem()                   # 原版
+problem_continuation = build_problem(continuation=True)   # 续贯版
+
+__all__ = ["problem", "problem_continuation", "build_problem",
+           "N", "dt", "T", "h", "EPS_START", "EPS_FINAL"]

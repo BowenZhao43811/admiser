@@ -51,26 +51,51 @@ def param_bounds_builder(problem: OCPProblem):
     return [(0.0, 50.0), (0.5, 5.0)]
 
 substep_rk4 = partial(rk4_substeps, m_sub=10)
-problem = OCPProblem(
-    N=N, dt=dt,
-    x0=np.zeros(nx), dyn=dyn, integrator=substep_rk4,
-    nu=nu, nx=nx, u0 = u0,
-    objective_builder=objective_builder,
-    control_bounds_builder=control_bounds_builder,
-    ntheta=ntheta, theta0=theta0, param_bounds_builder=param_bounds_builder,
-    x0_from_theta_ad=x0_from_theta_ad,
-    x0_from_theta_numeric=x0_from_theta_numeric,
-)
-problem.quad_scheme = 'rk4'
 
-# 终端等式：x1(1)=0
-problem.add_terminal_eq(lambda xT, th: xT[0])
+# 路径不等式：x3(t) ≥ 0.5  →  h = 0.5 - x3 ≤ 0
+def hfun(t, x, u, th):
+    return 0.5 - x[2]
 
-# 积分等式：∫ x3 dt = 1
-problem.add_integral_eq(qfun=lambda t,x,u,th: x[2], target=1.0)
+# ===== 两种求解模式各自的转译参数 =====
+# 单次求解（原版）：ε 与 γ 都固定
+EPS_SINGLE, GAMMA_SINGLE = 1e-6, 1e-8
+# 续贯求解：ε 从 EPS_START 逐轮缩到 EPS_FINAL（= 原版的 ε），γ 自动取 T·ε/4
+EPS_START, EPS_FINAL = 1e-2, 1e-6
 
-# 路径不等式：x3(t) ≥ 0.5  →  h = 0.5 - x3 ≤ 0  → add_path_ineq(h, eps, γ=0)
-problem.add_path_ineq(hfun=lambda t,x,u,th: 0.5 - x[2],
-                      eps=1e-6, gamma=1e-8)
 
-__all__ = ["problem", "N", "dt"]
+def build_problem(continuation: bool = False) -> OCPProblem:
+    """
+    continuation=False：原版，γ 固定，配 OCPSolver.solve()
+    continuation=True ：续贯版，省略 γ 使其自动跟随 ε，配 OCPSolver.solve_transcription()
+
+    每次调用都返回一个全新的 problem。续贯求解会就地修改 ε/γ，所以想重跑时
+    请重新 build_problem()，不要复用已经跑过的对象。
+    """
+    p = OCPProblem(
+        N=N, dt=dt,
+        x0=np.zeros(nx), dyn=dyn, integrator=substep_rk4,
+        nu=nu, nx=nx, u0 = u0,
+        objective_builder=objective_builder,
+        control_bounds_builder=control_bounds_builder,
+        ntheta=ntheta, theta0=theta0, param_bounds_builder=param_bounds_builder,
+        x0_from_theta_ad=x0_from_theta_ad,
+        x0_from_theta_numeric=x0_from_theta_numeric,
+    )
+    p.quad_scheme = 'rk4'
+    # 终端等式：x1(1)=0
+    p.add_terminal_eq(lambda xT, th: xT[0])
+    # 积分等式：∫ x3 dt = 1
+    p.add_integral_eq(qfun=lambda t,x,u,th: x[2], target=1.0)
+    # 路径不等式
+    if continuation:
+        p.add_path_ineq(hfun=hfun, eps=EPS_START)
+    else:
+        p.add_path_ineq(hfun=hfun, eps=EPS_SINGLE, gamma=GAMMA_SINGLE)
+    return p
+
+
+problem              = build_problem()                   # 原版
+problem_continuation = build_problem(continuation=True)   # 续贯版
+
+__all__ = ["problem", "problem_continuation", "build_problem",
+           "T", "N", "dt", "hfun", "EPS_START", "EPS_FINAL"]
