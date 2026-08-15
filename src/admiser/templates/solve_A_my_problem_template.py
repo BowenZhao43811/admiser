@@ -10,13 +10,14 @@ def main():
     solver = OCPSolver(problem).build()
     res = solver.solve(maxiter=2000, ftol=1e-9, disp=True)
 
-    U_opt  = res["U_opt"]              # shape = (N*nu,) 或 (N,nu) 由你的实现而定
+    U_opt  = res["U_opt"]                # shape = (N*nu,)
     theta  = res.get("theta_opt", None)
     J_opt  = res["J_opt"]
-    X_opt  = res["X_opt"]              # shape = (N+1, nx)
-    t_opt  = res["t_opt"]              # shape = (N+1,)
-    eq_res = res.get("eq_res", None)   # 若 OCPSolver 返回了等式残差
-    in_res = res.get("ineq_res", None) # 若 OCPSolver 返回了不等式残差
+    X_opt  = res["X_opt"]                # shape = (N+1, nx)
+    t_opt  = res["t_opt"]                # shape = (N+1,)
+    eq_res = res.get("eq_resid", None)   # 等式残差 G(z)，应 ≈ 0
+    in_res = res.get("ineq_resid", None) # 不等式残差 C(z)，应 ≥ 0
+    viol   = res.get("path_viol", None)  # 各路径不等式在网格上的 max h(t)，应 ≤ 0
 
     print("\n=== 结果 ===")
     print("J* =", J_opt)
@@ -26,6 +27,8 @@ def main():
         print("eq residual:", eq_res)
     if in_res is not None:
         print("ineq residual:", in_res)
+    if viol is not None:
+        print("max h(t) per path constraint:", viol)
 
     # 状态
     plt.figure()
