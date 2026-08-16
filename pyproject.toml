@@ -17,9 +17,13 @@ dependencies = [
   "scipy",
   "matplotlib"
 ]
+
+[project.optional-dependencies]
+# Everything needed to run the test suite. Install with:  pip install -e ".[dev]"
+dev = ["pytest>=7"]
+
 [project.scripts]
 admiser-install-cppad = "admiser_cppad_installer.install_cppad_cli:main"
-
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -34,3 +38,9 @@ where = ["src"]
 [tool.setuptools.package-data]
 "admiser.examples" = ["notebooks/*.ipynb"]
 "admiser_cppad_installer" = ["build_cppad.sh"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Put the tests directory on sys.path so test files can import the conftest
+# helpers directly; this is the recommended layout for a src/ project.
+pythonpath = ["tests"]
