@@ -40,7 +40,7 @@ def make_builders(
     objective_builder(au, atheta, problem) -> np.array([J], dtype=object)
 
     `quad` is this objective's default substep quadrature scheme; the available
-    names and their orders are in rk4_quadrature.QUAD_SCHEMES. If the
+    names and their orders are in quadrature.QUAD_SCHEMES. If the
     problem sets problem.quad_scheme explicitly, that wins -- the objective and
     every constraint must share one scheme, otherwise SLSQP sees them built on
     different discretisations and the resulting KKT point is meaningless.

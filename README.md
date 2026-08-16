@@ -192,7 +192,7 @@ Everything else lives in a named module and can be imported from there:
 | `admiser.problem_definition` | `OCPProblem` |
 | `admiser.objective_builder` | `make_builders` |
 | `admiser.constraint_smoothing` | `L_eps`, `smooth_abs` |
-| `admiser.rk4_quadrature` | `rk4_substeps`, `rk4_step`, `QUAD_SCHEMES`, `quad_order` |
+| `admiser.quadrature` | `rk4_substeps`, `rk4_step`, `QUAD_SCHEMES`, `quad_order` |
 | `admiser.ad_tape` | `build_ad_tape` — records the whole problem onto one tape |
 | `admiser.nlp_functions` | `NLPFunctions` — that tape presented to SciPy |
 | `admiser.problem_scaling` | `compute_scaling`, `ProblemScaling` |
@@ -407,7 +407,7 @@ A scheme's order is capped by **both** the quadrature rule and the accuracy of t
 
 `'rk4'` is exactly RK4 applied to the augmented state $\dot y = L(t,x,u,θ)$, which is why $\int L\,dt$ comes out as accurate as the trajectory.
 
-Programmatic access: `admiser.QUAD_SCHEMES` maps each name to its order, `n_eval` and a one-line summary. `quad_order(name)` and `validate_quad_scheme(name)` live in `admiser.rk4_quadrature`.
+Programmatic access: `admiser.QUAD_SCHEMES` maps each name to its order, `n_eval` and a one-line summary. `quad_order(name)` and `validate_quad_scheme(name)` live in `admiser.quadrature`.
 
 ## Writing AD-safe Model Functions
 

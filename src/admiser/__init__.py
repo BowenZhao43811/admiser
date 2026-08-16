@@ -12,7 +12,7 @@ needed. Each public name is a promise to keep, so this list stays short on purpo
     problem_definition     OCPProblem: the problem and how it should be solved
     objective_builder      make_builders: assembles int L dt + Phi
     constraint_smoothing   L_eps, smooth_abs: the smoothing behind the transcription
-    rk4_quadrature         rk4_substeps and the quadrature scheme family
+    quadrature             the substep integrator and the quadrature scheme family
     ad_tape                records the whole problem onto one AD tape
     nlp_functions          presents that tape to SciPy, with caching and scaling
     problem_scaling        the automatic objective/constraint scaling
@@ -39,7 +39,7 @@ except ImportError as _exc:       # pragma: no cover - depends on the user's env
 from .problem_definition import OCPProblem
 from .sqp_solver import OCPSolver
 from .objective_builder import make_builders
-from .rk4_quadrature import rk4_substeps, QUAD_SCHEMES
+from .quadrature import rk4_substeps, QUAD_SCHEMES
 
 # ---- helpers a user genuinely writes into their own model functions ----
 # These are AD-safe by construction: they record CppAD conditional expressions

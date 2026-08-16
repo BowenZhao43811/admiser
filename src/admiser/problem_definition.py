@@ -4,7 +4,7 @@ from contextlib import contextmanager
 import numpy as np
 import cppad_py
 
-from .rk4_quadrature import validate_quad_scheme
+from .quadrature import validate_quad_scheme
 
 #: Package-wide default quadrature scheme: 4th order, matching the state
 #: integrator, and costing no extra dynamics evaluations.
@@ -86,7 +86,7 @@ class OCPProblem:
         self.path_eq_specs   = []  # path equality h(t)=0 -> int h^2 dt = 0, or int smooth|h| dt = 0
         self.path_ineq_specs = []  # path inequality h<=0 -> int L_eps(h) dt <= gamma
 
-        # Substep quadrature scheme; see rk4_quadrature.QUAD_SCHEMES.
+        # Substep quadrature scheme; see quadrature.QUAD_SCHEMES.
         # None means "unspecified", in which case the quad carried by
         # objective_builder decides (see resolve_quad_scheme). Setting it
         # explicitly overrides that and applies to the objective and all
