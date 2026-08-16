@@ -5,7 +5,7 @@ import inspect
 import numpy as np
 from scipy.optimize import minimize
 
-from .ocp_ADfunction_tapes import build_ad_tapes
+from .ocp_ADfunction_tapes import build_ad_tape
 from .ocp_ADgradient_builders import optimize_fun_class
 
 
@@ -58,10 +58,8 @@ class OCPSolver:
 
     def __init__(self, problem: object):
         self.problem = problem
-        self.objective_ad = None
-        self.eq_ad = None
-        self.ineq_ad = None
-        self.opt_fun = None
+        self.taped = None      # the TapedNLP recorded by _build_tape()
+        self.opt_fun = None    # SciPy-facing view of that tape
         self.history_cost = []
 
     # ================= public interface =================
@@ -94,7 +92,7 @@ class OCPSolver:
             # eps is scaled only inside this with-block and restored on exit, so
             # spec["eps"] always keeps the value the user registered.
             with p.scaled_eps(factor=factor):
-                self._build_tapes()
+                self._build_tape()
                 res = self._solve_once(z, maxiter=maxiter, ftol=ftol, disp=disp)
                 z = res["scipy_result"].x
                 eps_now = [p.effective_eps(s) for s in p.path_ineq_specs]
@@ -135,19 +133,19 @@ class OCPSolver:
         p = self.problem
         factor = p.eps_factors()[0]
         with p.scaled_eps(factor=factor, override=eps):
-            self._build_tapes()
+            self._build_tape()
         return self.opt_fun
 
     # ================= internals =================
 
-    def _build_tapes(self):
+    def _build_tape(self):
         """
-        Record the AD tapes. eps is baked into the tape as a constant, which is
-        why every continuation round has to re-record.
+        Record the AD tape. eps is baked into it as a constant, which is why every
+        continuation round has to re-record.
         """
         z0 = self.problem.initial_guess()
-        self.objective_ad, self.eq_ad, self.ineq_ad = build_ad_tapes(z0, self.problem)
-        self.opt_fun = optimize_fun_class(self.objective_ad, self.eq_ad, self.ineq_ad)
+        self.taped = build_ad_tape(z0, self.problem)
+        self.opt_fun = optimize_fun_class(self.taped)
         return self.opt_fun
 
     def _solve_once(self, z0, maxiter, ftol, disp):
@@ -155,9 +153,9 @@ class OCPSolver:
         bounds = self.problem.make_bounds()
 
         constraints = []
-        if self.eq_ad is not None:
+        if self.opt_fun.has_eq:
             constraints.append({'type': 'eq', 'fun': self.opt_fun.eq_fun, 'jac': self.opt_fun.eq_jac})
-        if self.ineq_ad is not None:
+        if self.opt_fun.has_ineq:
             constraints.append({'type': 'ineq', 'fun': self.opt_fun.ineq_fun, 'jac': self.opt_fun.ineq_jac})
 
         self.history_cost = []
@@ -170,8 +168,8 @@ class OCPSolver:
 
         U_opt, theta_opt = self.problem.split_decision(res.x)
         J_opt = self.opt_fun.objective_fun(res.x)
-        eq_resid   = self.opt_fun.eq_fun(res.x)   if self.eq_ad   is not None else None
-        ineq_resid = self.opt_fun.ineq_fun(res.x) if self.ineq_ad is not None else None
+        eq_resid   = self.opt_fun.eq_fun(res.x)   if self.opt_fun.has_eq   else None
+        ineq_resid = self.opt_fun.ineq_fun(res.x) if self.opt_fun.has_ineq else None
         t_opt, X_opt = self._numeric_rollout(U_opt, theta_opt)
 
         return dict(

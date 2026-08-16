@@ -3,8 +3,8 @@ r"""
 make_builders only builds the objective_builder, i.e. \int L dt + Phi.
 
 All constraints -- terminal, integral and path, equalities and inequalities --
-are registered through the OCPProblem.add_* API, and build_ad_tapes assembles
-eq_ad / ineq_ad from a single rollout.
+are registered through the OCPProblem.add_* API, and build_ad_tape assembles
+the objective and all constraints onto one tape from a single rollout.
 
 The return value is a SINGLE objective_builder function (an early version
 returned a 2-tuple; that is gone).
@@ -95,8 +95,24 @@ def make_builders(
 
         return np.array([J], dtype=object)
 
-    # Attach quad to the function so OCPProblem.resolve_quad_scheme can read it and
-    # keep the objective and constraint tapes on the same scheme. (In an earlier
-    # version this argument was unconditionally overridden and had no effect.)
+    # Expose the pieces the objective is made of, as attributes on the returned
+    # function. Two consumers rely on them:
+    #
+    #   quad      OCPProblem.resolve_quad_scheme reads it, so the objective and
+    #             the constraint rows end up on the same quadrature scheme. (In an
+    #             earlier version this argument was unconditionally overridden and
+    #             had no effect at all.)
+    #   L, Phi    build_ad_tape accumulates int L dt inside its single shared
+    #             rollout instead of calling this closure, which is what lets one
+    #             rollout serve the objective and every constraint.
+    #   dyn       build_ad_tape checks it against problem.dyn: if the two differ,
+    #             the objective and the constraints would be built on different
+    #             dynamics, so it falls back to calling this closure instead.
+    #
+    # The closure itself remains fully functional, and is still used whenever the
+    # fast path does not apply.
     objective_builder.quad = quad
+    objective_builder.L = L
+    objective_builder.Phi = Phi
+    objective_builder.dyn = dyn
     return objective_builder

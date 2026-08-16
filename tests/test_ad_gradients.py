@@ -79,7 +79,7 @@ def test_constraint_jacobians_match_finite_difference(name, example_problems):
 
     checked = []
 
-    if nlp.eq_ad is not None:
+    if nlp.has_eq:
         err = relative_error(nlp.eq_jac(z),
                              central_difference_jacobian(nlp.eq_fun, z))
         assert err < GRADIENT_TOLERANCE, (
@@ -88,7 +88,7 @@ def test_constraint_jacobians_match_finite_difference(name, example_problems):
         )
         checked.append("eq")
 
-    if nlp.ineq_ad is not None:
+    if nlp.has_ineq:
         err = relative_error(nlp.ineq_jac(z),
                              central_difference_jacobian(nlp.ineq_fun, z))
         assert err < GRADIENT_TOLERANCE, (
