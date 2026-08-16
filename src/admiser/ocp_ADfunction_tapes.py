@@ -129,8 +129,12 @@ def build_ad_tape(z_template, problem) -> TapedNLP:
 
     # ---------------- start recording ----------------
     az = cppad_py.independent(z_template)
+    # Layout of the decision vector: [U (N*nu) ; theta (ntheta) ; tau (N)].
+    # The tau block only exists when the time-scaling transform is enabled.
     au = az[:nuN]
-    ath = az[nuN:nuN + (problem.ntheta if has_params else 0)] if has_params else None
+    i = nuN + (problem.ntheta if has_params else 0)
+    ath = az[nuN:i] if has_params else None
+    atau = az[i:i + problem.N] if problem.has_time_scaling() else None
 
     # ---------------- one accumulator per integral being taken ----------------
     # Each is updated inside acc_cb and read out after the rollout finishes.
@@ -192,19 +196,29 @@ def build_ad_tape(z_template, problem) -> TapedNLP:
     needs_quadrature = (L is not None or problem.int_eq_specs or problem.path_eq_specs
                         or problem.int_ineq_specs or problem.path_ineq_specs)
 
-    for k in range(problem.N):
-        uk = (np.array([au[k]], dtype=object) if problem.nu == 1
-              else np.asarray(au[problem.nu*k: problem.nu*(k+1)], dtype=object))
-        dt_k = problem.dt_of_segment(k)
-        x = problem.integrator(
-            x, uk, dt_k, f,
-            accumulate_cb=acc_cb if needs_quadrature else None,
-            t0=t,
-            quad=scheme,
-        )
-        t = t + dt_k
+    # Under CPET the durations are decision variables, so dt_of_segment() has to
+    # reach the a_double slice above. This context manager makes it visible for
+    # the duration of the rollout and always clears it afterwards.
+    with problem.taping_time_scaling(atau):
+        for k in range(problem.N):
+            uk = (np.array([au[k]], dtype=object) if problem.nu == 1
+                  else np.asarray(au[problem.nu*k: problem.nu*(k+1)], dtype=object))
+            dt_k = problem.dt_of_segment(k)
+            x = problem.integrator(
+                x, uk, dt_k, f,
+                accumulate_cb=acc_cb if needs_quadrature else None,
+                t0=t,
+                quad=scheme,
+            )
+            t = t + dt_k
 
-    xT = x   # terminal state, used by the terminal constraints below
+        xT = x   # terminal state, used by the terminal constraints below
+
+        # The compatibility route below runs the builder's own rollout, which also
+        # calls dt_of_segment(), so it has to stay inside this block too.
+        if not fold_objective_in:
+            aJ_compat = np.atleast_1d(
+                np.asarray(_call_builder(builder, au, ath, problem), dtype=object))
 
     # ---------------- objective ----------------
     if fold_objective_in:
@@ -217,10 +231,9 @@ def build_ad_tape(z_template, problem) -> TapedNLP:
                 J = J + Phi_val
         objective_rows = [J]
     else:
-        # Compatibility route: run the builder while the tape is still recording,
-        # so its own rollout is captured on this same tape.
-        aJ = np.atleast_1d(np.asarray(_call_builder(builder, au, ath, problem), dtype=object))
-        objective_rows = list(aJ)
+        # Compatibility route: the builder ran its own rollout on this same tape,
+        # inside the block above.
+        objective_rows = list(aJ_compat)
 
     # ---------------- equalities G(z) = 0 ----------------
     # The order below is the order the residual vector is reported in, so it is

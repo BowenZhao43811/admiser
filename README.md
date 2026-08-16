@@ -4,6 +4,7 @@ ADMISER is a **Numerical Optimal Control** toolkit that incorporates **Automatic
 
 
 - ✅ **Control Parametrization** (piecewise-constant controls; policy/feedback parametrization)
+- ✅ **Time Scaling (CPET)**: segment durations become decision variables, so switching instants and free terminal times are found exactly instead of being quantised to a fixed grid
 - ✅ **Constraint Transcription** (smooth path inequalities → canonical integral constraints), with an ε→0 **continuation loop**
 - ✅ **Canonical constraints**: terminal eq/ineq, integral eq/ineq, path eq/ineq (smoothed)
 - ✅ **Multi-substep RK4** integrator with **4th-order** substep quadrature (cost integrals are as accurate as the state trajectory, at no extra dynamics evaluations)
@@ -24,7 +25,8 @@ ADMISER is a **Numerical Optimal Control** toolkit that incorporates **Automatic
 - [Choosing ε and γ](#choosing-ε-and-γ)
 - [Quadrature Accuracy](#quadrature-accuracy)
 - [Writing AD-safe Model Functions](#writing-ad-safe-model-functions)
-- [Free Terminal Time Transforme](#free-terminal-time)
+- [Time Scaling (CPET)](#time-scaling-cpet)
+- [Free Terminal Time](#free-terminal-time)
 - [Cite / Acknowledge](#cite--acknowledge)
 
 ---
@@ -311,28 +313,102 @@ def dyn(x, u, theta=None):
 - ❌ Python `if` / `min` / `max` / `abs` / `np.where` on AD values, and `float(...)` casts of them.
 - ✅ `np.exp/sin/cos/sqrt/**` on `a_double` (they dispatch to CppAD operations), and `admiser.L_eps` / `admiser.smooth_abs`, which use `cond_assign` so the comparison is recorded as a real `CondExp` operator and re-evaluated on every pass.
 
+## Time Scaling (CPET)
+
+Without the transform the knot points are fixed and uniform: the optimiser
+chooses only the control **value** on each segment, never where the segments end.
+For a bang-bang solution the switching instant can then only land on a grid
+point, so resolving it costs a fine grid — and because the grid is uniform, that
+cost is paid everywhere, not just near the switch.
+
+Teo's **Control Parameterization Enhancing Transform** makes the segment
+durations decision variables. Introduce a new independent variable $s$ on which
+the grid *is* uniform, and let real time flow at an optimisable rate:
+
+$$\frac{dt}{ds} = \tau_k, \qquad s \in [k-1,\ k)$$
+
+Segment $k$, of width 1 in $s$, therefore lasts $\tau_k$ in real time. The
+augmented system is
+
+$$\frac{dx}{ds} = \tau_k\, f(t,x,u_k), \qquad \frac{dt}{ds} = \tau_k$$
+
+so the ODE is still solved on a fixed uniform grid, while all the awkward
+variability has been absorbed into ordinary decision variables. The decision
+vector becomes $z = [U\ (N n_u)\ ;\ \theta\ (n_\theta)\ ;\ \tau\ (N)]$.
+
+Enable it in the problem definition:
+
+```py
+problem.set_time_scaling(tau0=dt, tau_min=0.0, tau_max=None, total_time=None)
+```
+
+| argument | meaning |
+|---|---|
+| `tau0` | initial guess for the durations; `None` gives a uniform split, $\tau_k = dt$ |
+| `tau_min` | lower bound, default `0.0`. Zero is the standard choice: a duration collapsing to zero is how the optimiser **drops a segment it does not need**. Negative durations would run time backwards and are always rejected |
+| `tau_max` | upper bound, `None` for unbounded |
+| `total_time` | pin the horizon with $\sum \tau_k = T$. Leave it `None` for a **free** horizon |
+
+`total_time=T` is nothing special: it registers exactly
+`add_integral_eq(qfun=lambda t, x, u, th: 1.0, target=T)`, because
+$\int_0^T 1\,dt = \sum_k \tau_k$.
+
+The solve entry point does not change — `OCPSolver(problem).solve(...)` — and the
+result dict gains `tau_opt` (the optimised durations) and `T_opt` (their sum).
+`t_opt` becomes the true, non-uniform knot grid.
+
+### What it buys: resolving a switch
+
+On `my_bang_bang`, where the optimal control switches once:
+
+```
+setup                               n_vars              J*
+fixed grid, N=4                          8   -41.250000000
+fixed grid, N=8                         16   -41.250000000
+fixed grid, N=21                        42   -41.301155383
+fixed grid, N=84                       168   -41.348396501
+CPET,       N=4                         12   -41.309894531
+CPET,       N=8                         24   -41.349001795
+```
+
+CPET with 8 segments and 24 variables beats a uniform grid of 84 segments and 168
+variables. On a fixed grid the switch is quantised to the knot spacing, and the
+only way to sharpen it is to refine everywhere.
+
 ## Free Terminal Time
-The free-terminal time problem is a special type of optimal control problem, where the objective function is typically to minimize the system's runtime.
 
-Currently, users need to manually transform this type of problem into a "standard" optimal control problem before defining and solving it. The transformation process is as follows:
+A minimum-time problem
 
-$$
-\begin{aligned}
-\min\;& t_f \\
-\text{s.t.}\;& \frac{dx}{dt} = f(t,x,u,\theta)
-\end{aligned}
-$$
-Introduce new state-control pire ($x_{extra}$ and $u_{extra}$) for the shortest time decision variable $t_f$:
-$$
-\begin{aligned}
-\min\;& x_{\text{extra}} \\
-\text{s.t.}\;& \frac{dx}{dt} = f(t,x,u,\theta)\,x_{\text{extra}} \\
-& \frac{d x_{\text{extra}}}{dt} = u_{\text{extra}}
-\end{aligned}
-$$
+$$\min\ t_f \quad \text{s.t.}\quad \frac{dx}{dt} = f(t,x,u,\theta)$$
 
-> 😊 Examples can be found in `admiser\examples\my_free_terminal_time.py` and `admiser\examples\my_free_terminal_time2.py`.
+needs no rewriting. Turn the transform on, leave `total_time` unset so the
+horizon is free, and make the objective the elapsed time:
 
+```py
+def L(t, x, u, theta):
+    return 1.0                       # int 1 dt == sum(tau) == the horizon
+
+problem.set_time_scaling(tau0=dt, tau_min=1e-4)
+```
+
+```py
+res = OCPSolver(problem).solve()
+print(res["T_opt"])                  # the minimum time
+print(res["tau_opt"])                # where the segments ended up
+```
+
+> ℹ️ **Earlier versions required a manual rewrite** — introducing an extra state
+> $x_\text{extra}$ and control $u_\text{extra}$ so that every equation read
+> $\dot x = f(t,x,u,\theta)\,x_\text{extra}$ with $\dot x_\text{extra} = u_\text{extra}$,
+> then minimising $x_\text{extra}(T)$. That *is* the time-scaling transform, written
+> out by hand. It is no longer necessary: state and control keep their natural
+> meaning and dimensions.
+
+> 😊 Both `admiser/examples/my_free_terminal_time.py` and
+> `admiser/examples/my_free_terminal_time2.py` have been rewritten this way. They
+> reproduce the minimum times of the hand-transformed versions (4.3211735 and
+> 46.17131), and the second one now converges cleanly where the manual version
+> used to stop with SLSQP status 8.
 
 ## Cite / Acknowledge
 

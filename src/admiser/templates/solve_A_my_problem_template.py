@@ -17,6 +17,8 @@ def main():
     J_opt  = res["J_opt"]
     X_opt  = res["X_opt"]                # shape = (N+1, nx)
     t_opt  = res["t_opt"]                # shape = (N+1,)
+    tau    = res.get("tau_opt", None)    # segment durations, when CPET is enabled
+    T_opt  = res.get("T_opt", None)      # optimised horizon sum(tau), when CPET is enabled
     eq_res = res.get("eq_resid", None)   # equality residual G(z), should be ~ 0
     in_res = res.get("ineq_resid", None) # inequality residual C(z), should be >= 0
     viol   = res.get("path_viol", None)  # max h(t) on the grid per path constraint, should be <= 0
@@ -25,6 +27,9 @@ def main():
     print("J* =", J_opt)
     if theta is not None:
         print("theta* =", theta)
+    if T_opt is not None:
+        print("T*     =", T_opt, " (optimised horizon)")
+        print("tau*   =", tau)
     if eq_res is not None:
         print("eq residual:", eq_res)
     if in_res is not None:
@@ -43,12 +48,14 @@ def main():
     plt.xlabel("t"); plt.ylabel("state"); plt.title("States"); plt.legend()
 
     # controls (piecewise constant over N segments)
+    # t_opt already carries the true knot positions -- uniform without CPET,
+    # non-uniform with it -- so use it rather than rebuilding a linspace.
     nu = problem.nu
     U_mat = U_opt.reshape(N, nu) if U_opt.ndim == 1 else U_opt
-    tc = np.linspace(0.0, np.sum(np.diff(t_opt)), N)  # equals linspace(0, T, N) for constant dt
+    tc = t_opt[:-1]
     plt.figure()
     for j in range(nu):
-        plt.step(tc, U_mat[:, j], where='pre', label=f"u{j+1}")
+        plt.step(tc, U_mat[:, j], where='post', label=f"u{j+1}")
     plt.xlabel("t"); plt.ylabel("u"); plt.title("Controls"); plt.legend()
 
     plt.show()

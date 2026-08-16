@@ -96,11 +96,133 @@ class OCPProblem:
         # Solve strategy for the path-constraint transcription; see set_transcription().
         self.transcription = dict(mode="single", n_rounds=1, shrink=0.1)
 
+        # Time-scaling transform (CPET); None until set_time_scaling() is called.
+        # See that method for what it does and why.
+        self.time_scaling = None
+
+        # Set only while a tape is being recorded, by taping_time_scaling(). It
+        # holds the a_double segment durations sliced out of the independent
+        # variables, which is how dt_of_segment() reaches them.
+        self._atau = None
+
         # Transient epsilon adjustment. Only set briefly by OCPSolver through
         # scaled_eps() and always restored afterwards, so the value registered
         # in spec["eps"] always stays exactly what the user wrote.
         self._eps_factor = 1.0
         self._eps_override = None
+
+    # ---------- time-scaling transform (CPET) ----------
+    def set_time_scaling(self, tau0=None, tau_min=0.0, tau_max=None,
+                         total_time=None) -> "OCPProblem":
+        """
+        Turn the segment durations into decision variables (Teo's Control
+        Parameterization Enhancing Transform).
+
+        What it does
+        ------------
+        Without it the knot points are fixed and uniform: the optimiser chooses
+        only the control VALUE on each segment, never where the segments end. For
+        a bang-bang solution the switching instant can then only land on a grid
+        point, so resolving it costs a fine grid -- and the grid is uniform, so
+        the cost is paid everywhere, not just near the switch.
+
+        CPET introduces a new independent variable s on which the grid IS uniform,
+        and lets real time flow at an optimisable rate:
+
+            dt/ds = tau_k    for s in [k-1, k)
+
+        Segment k, of width 1 in s, therefore has duration tau_k in real time. The
+        augmented system is
+
+            dx/ds = tau_k * f(t, x, u_k),      dt/ds = tau_k
+
+        so the ODE is still solved on a fixed uniform grid, while all the awkward
+        variability has been absorbed into ordinary decision variables tau_k.
+
+        The decision vector becomes  z = [U (N*nu) ; theta (ntheta) ; tau (N)].
+
+        Free terminal time comes out for free: leave total_time as None and make
+        the objective the elapsed time, L(t, x, u, theta) = 1.0, since
+        int 1 dt = sum(tau). That replaces the usual trick of hand-adding an extra
+        state and control to carry the horizon.
+
+        Parameters
+        ----------
+        tau0 : initial guess for the durations. Scalar, array of length N, or None
+               for a uniform split, tau_k = dt, whose sum is the nominal N*dt.
+        tau_min, tau_max : box bounds on every duration. tau_min defaults to 0,
+               which is the standard choice: a duration may collapse to zero, and
+               that is precisely how the optimiser drops a segment it does not
+               need. Negative durations would run time backwards and are never
+               allowed. tau_max=None means unbounded above.
+        total_time : if given, pin the horizon by registering sum(tau) = total_time.
+               That constraint is nothing special -- it is exactly
+                   add_integral_eq(qfun=lambda t, x, u, th: 1.0, target=total_time)
+               because int 1 dt over the whole horizon is sum(tau). Leave it None
+               for a free horizon.
+        """
+        if tau0 is None:
+            tau = np.full(self.N, self.dt, dtype=float)
+        else:
+            tau = np.asarray(tau0, dtype=float)
+            if tau.ndim == 0:
+                tau = np.full(self.N, float(tau), dtype=float)
+            if tau.shape != (self.N,):
+                raise ValueError(
+                    f"tau0 must be a scalar or have shape ({self.N},), got {tau.shape}")
+        if np.any(tau < 0.0):
+            raise ValueError("tau0 must be non-negative; durations cannot run backwards")
+
+        lo = float(tau_min)
+        if lo < 0.0:
+            raise ValueError(f"tau_min must be >= 0, got {tau_min}")
+        hi = np.inf if tau_max is None else float(tau_max)
+        if hi <= lo:
+            raise ValueError(f"tau_max must exceed tau_min, got {tau_max} <= {tau_min}")
+
+        self.time_scaling = dict(tau0=tau, tau_min=lo, tau_max=hi,
+                                 total_time=None if total_time is None else float(total_time))
+
+        if total_time is not None:
+            # int 1 dt == sum(tau), so a plain integral equality pins the horizon.
+            self.add_integral_eq(qfun=lambda t, x, u, th: 1.0, target=float(total_time))
+        return self
+
+    def has_time_scaling(self) -> bool:
+        return self.time_scaling is not None
+
+    @property
+    def n_tau(self) -> int:
+        """Number of duration variables: N when CPET is on, otherwise 0."""
+        return self.N if self.has_time_scaling() else 0
+
+    def nominal_horizon(self) -> float:
+        """
+        The problem's total duration, used wherever a horizon length is needed
+        (auto_gamma, for instance).
+
+        Without CPET that is simply N*dt. With CPET the horizon is a variable, so
+        the pinned total_time is used when there is one, and otherwise the sum of
+        the initial durations -- a nominal figure, which is all auto_gamma needs.
+        """
+        if not self.has_time_scaling():
+            return float(self.N * self.dt)
+        if self.time_scaling["total_time"] is not None:
+            return float(self.time_scaling["total_time"])
+        return float(np.sum(self.time_scaling["tau0"]))
+
+    @contextmanager
+    def taping_time_scaling(self, atau):
+        """
+        Make the a_double durations visible to dt_of_segment() while a tape is
+        being recorded. Mirrors scaled_eps(): set on entry, always restored on exit.
+        """
+        old = self._atau
+        self._atau = atau
+        try:
+            yield self
+        finally:
+            self._atau = old
 
     # ---------- transcription strategy ----------
     def set_transcription(self, mode: str = "single", n_rounds: int = 4,
@@ -236,7 +358,8 @@ class OCPProblem:
     def auto_gamma(self, eps: float) -> float:
         """
         The gamma that is consistent with a given eps in the constraint
-        transcription: gamma = T*eps/4, with T = N*dt.
+        transcription: gamma = T*eps/4, with T the horizon (N*dt normally; see
+        nominal_horizon(), since CPET turns the horizon into a variable).
 
         Rationale: L_eps(h) - max(h, 0) lies in [0, eps/4], and on h <= 0 the
         maximum of L_eps is attained exactly at L_eps(0) = eps/4. Therefore
@@ -251,7 +374,7 @@ class OCPProblem:
         (a strictly interior solution). That is both overly conservative and a
         frequent cause of SLSQP losing its descent direction on the boundary.
         """
-        return float(self.N * self.dt * float(eps) / 4.0)
+        return float(self.nominal_horizon() * float(eps) / 4.0)
 
     def add_path_ineq(self, hfun, eps: float, gamma: float | None = None):
         """
@@ -289,6 +412,16 @@ class OCPProblem:
         time grids. Subclasses or users may implement _current_dt(k) returning an
         a_double to support variable step sizes.
         """
+        # CPET: while a tape is being recorded the durations are decision
+        # variables, so hand back the a_double for this segment. Everything
+        # downstream -- the RK4 step, the quadrature weights, the running time --
+        # then becomes a function of tau automatically, which is exactly the
+        # transformed system dx/ds = tau_k * f and dt/ds = tau_k.
+        if self._atau is not None:
+            return self._atau[k]
+        if self.has_time_scaling():
+            # Numeric path (no tape): use the current duration guess.
+            return float(self.time_scaling["tau0"][k])
         if callable(getattr(self, "_current_dt", None)):
             return self._current_dt(k)
         return cppad_py.a_double(self.dt)
@@ -315,11 +448,15 @@ class OCPProblem:
         if self.x0.shape != (self.nx,):
             raise ValueError(f"x0 has shape {self.x0.shape}, which does not match nx={self.nx}.")
 
-        n_z = self.N * self.nu + (self.ntheta if self.has_params() else 0)
+        n_z = (self.N * self.nu
+               + (self.ntheta if self.has_params() else 0)
+               + self.n_tau)
         bnds = self.make_bounds()
         if len(bnds) != n_z:
             raise ValueError(
-                f"Got {len(bnds)} box bounds but {n_z} decision variables (= N*nu + ntheta); "
+                f"Got {len(bnds)} box bounds but {n_z} decision variables "
+                f"(= N*nu + ntheta + n_tau = {self.N * self.nu} + "
+                f"{self.ntheta if self.has_params() else 0} + {self.n_tau}); "
                 "check the lengths returned by control_bounds_builder / param_bounds_builder."
             )
         if self.initial_guess().size != n_z:
@@ -431,6 +568,10 @@ class OCPProblem:
             else:
                 z.extend(np.asarray(self.theta0, dtype=float).tolist())
 
+        # segment durations, when CPET is enabled
+        if self.has_time_scaling():
+            z.extend(self.time_scaling["tau0"].tolist())
+
         return np.asarray(z, dtype=float)
 
     # ---------- box bounds ----------
@@ -449,13 +590,43 @@ class OCPProblem:
             else:
                 bounds.extend([(-np.inf, np.inf)] * self.ntheta)
 
+        if self.has_time_scaling():
+            ts = self.time_scaling
+            bounds.extend([(ts["tau_min"], ts["tau_max"])] * self.N)
+
         return bounds
 
     # ---------- split the decision vector ----------
     def split_decision(self, z):
+        """
+        Split z into (U, theta, tau), following the layout
+            z = [U (N*nu) ; theta (ntheta) ; tau (N)]
+        theta is None when the problem has no system parameters, and tau is None
+        when the time-scaling transform is off.
+        """
         z = np.asarray(z, dtype=float)
-        U = z[: self.N * self.nu]
+        i = self.N * self.nu
+        U = z[:i]
+
         theta = None
         if self.has_params():
-            theta = z[self.N * self.nu : self.N * self.nu + self.ntheta]
-        return U, theta
+            theta = z[i: i + self.ntheta]
+            i += self.ntheta
+
+        tau = None
+        if self.has_time_scaling():
+            tau = z[i: i + self.N]
+
+        return U, theta, tau
+
+    def segment_durations(self, tau=None):
+        """
+        The duration of each segment as a float array of length N: the optimised
+        tau under CPET, or a uniform dt otherwise. Used by the numeric rollout and
+        for building the time grid.
+        """
+        if tau is not None:
+            return np.asarray(tau, dtype=float)
+        if self.has_time_scaling():
+            return np.asarray(self.time_scaling["tau0"], dtype=float)
+        return np.full(self.N, self.dt, dtype=float)

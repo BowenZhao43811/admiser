@@ -39,8 +39,11 @@ class OCPSolver:
     scipy_result : the SciPy result of the final round
     U_opt        : ndarray (N*nu,), optimal control
     theta_opt    : ndarray (ntheta,), optimal system parameters (None if there are none)
+    tau_opt      : ndarray (N,), optimal segment durations under the time-scaling
+                   transform (None when it is off)
+    T_opt        : float, the optimised horizon sum(tau) (None when it is off)
     J_opt        : float, optimal cost
-    t_opt        : ndarray (N+1,), time grid
+    t_opt        : ndarray (N+1,), time grid; non-uniform under the time-scaling transform
     X_opt        : ndarray (N+1, nx), optimal state trajectory
     eq_resid     : ndarray, equality residual G(z), should be ~ 0 (None if there are none)
     ineq_resid   : ndarray, inequality residual C(z), should be >= 0 (None if there are none)
@@ -166,14 +169,16 @@ class OCPSolver:
             options=dict(maxiter=maxiter, ftol=ftol, disp=disp),
         )
 
-        U_opt, theta_opt = self.problem.split_decision(res.x)
+        U_opt, theta_opt, tau_opt = self.problem.split_decision(res.x)
         J_opt = self.opt_fun.objective_fun(res.x)
         eq_resid   = self.opt_fun.eq_fun(res.x)   if self.opt_fun.has_eq   else None
         ineq_resid = self.opt_fun.ineq_fun(res.x) if self.opt_fun.has_ineq else None
-        t_opt, X_opt = self._numeric_rollout(U_opt, theta_opt)
+        t_opt, X_opt = self._numeric_rollout(U_opt, theta_opt, tau_opt)
 
         return dict(
             scipy_result=res, U_opt=U_opt, theta_opt=theta_opt, J_opt=J_opt,
+            tau_opt=tau_opt,
+            T_opt=(None if tau_opt is None else float(np.sum(tau_opt))),
             t_opt=t_opt, X_opt=X_opt, eq_resid=eq_resid, ineq_resid=ineq_resid,
             path_viol=self._path_violation(t_opt, X_opt, U_opt, theta_opt),
             history_cost=np.array(self.history_cost),
@@ -206,10 +211,16 @@ class OCPSolver:
             out.append(worst)
         return np.asarray(out, dtype=float)
 
-    def _numeric_rollout(self, U, theta):
-        """Replay the optimal trajectory with the problem's dyn/integrator, for plotting."""
+    def _numeric_rollout(self, U, theta, tau=None):
+        """
+        Replay the optimal trajectory with the problem's dyn/integrator, for plotting.
+
+        Under the time-scaling transform each segment has its own duration, so the
+        time grid is the cumulative sum of tau rather than a uniform linspace.
+        """
         p = self.problem
-        N, dt, nx, nu = p.N, p.dt, p.nx, p.nu
+        N, nx, nu = p.N, p.nx, p.nu
+        durations = p.segment_durations(tau)
 
         # Use the problem's hook to build the numeric initial state from theta;
         # fall back to the fixed x0 when there is none.
@@ -220,7 +231,7 @@ class OCPSolver:
 
         X = np.zeros((N+1, nx), dtype=float)
         X[0] = x
-        t = np.linspace(0.0, N*dt, N+1)
+        t = np.concatenate(([0.0], np.cumsum(durations)))
 
         step = p.integrator
         f_num = _bind_dyn_numeric(p.dyn, theta)
@@ -230,7 +241,8 @@ class OCPSolver:
                 uk = np.array([U[k]], dtype=float)
             else:
                 uk = np.asarray(U[nu*k:nu*(k+1)], dtype=float)
-            x = step(x, uk, dt, f_num)  # substeps are handled inside the integrator
+            # substeps are handled inside the integrator
+            x = step(x, uk, durations[k], f_num)
             X[k+1] = x
 
         return t, X

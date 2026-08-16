@@ -150,5 +150,24 @@ problem.add_path_ineq(hfun=h_ineq, eps=1e-2)
 #     it down gets both. Below, eps runs 1e1 -> 1e0 -> 1e-1 -> 1e-2.
 problem.set_transcription(mode="continuation", n_rounds=4, shrink=0.1)
 
-# ============= 11) exports =============
+# ============= 11) optional: the time-scaling transform (CPET) =============
+# Off by default. Enabling it makes the SEGMENT DURATIONS decision variables, so
+# the optimiser chooses where the segments end, not just the control value on
+# each one. The decision vector becomes  z = [U (N*nu) ; theta (ntheta) ; tau (N)].
+#
+# Two situations where it pays off:
+#
+#   Bang-bang solutions. With a fixed uniform grid the switching instant can only
+#   land on a grid point, so resolving it costs a fine grid everywhere. On the
+#   my_bang_bang problem, CPET with N=8 (24 variables) beats a uniform grid with
+#   N=84 (168 variables).
+#
+#   Free terminal time. Leave total_time unset and make the objective the elapsed
+#   time, L = 1.0, since int 1 dt = sum(tau). No extra state or control needed.
+#
+# Fixed horizon instead: pass total_time=T, which registers sum(tau) = T.
+#
+# problem.set_time_scaling(tau0=dt, tau_min=0.0, tau_max=None, total_time=T)
+
+# ============= 12) exports =============
 __all__ = ["problem", "N", "dt", "T"]
