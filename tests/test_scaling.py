@@ -19,7 +19,7 @@ import numpy as np
 import pytest
 
 from admiser import OCPProblem, OCPSolver, make_builders, rk4_substeps
-from admiser.ocp_scaling_utils import compute_scaling, identity_scaling
+from admiser.problem_scaling import compute_scaling, identity_scaling
 
 
 def _toy_problem(objective_magnitude=1.0):

@@ -1,3 +1,24 @@
+"""
+ADMISER -- optimal control by control parametrization, with automatic
+differentiation in place of the adjoint equations.
+
+The public surface is deliberately small. Almost every problem needs only:
+
+    from admiser import OCPProblem, OCPSolver, make_builders, rk4_substeps
+
+Everything else lives in the modules below and can be imported from there when
+needed. Each public name is a promise to keep, so this list stays short on purpose.
+
+    problem_definition     OCPProblem: the problem and how it should be solved
+    objective_builder      make_builders: assembles int L dt + Phi
+    constraint_smoothing   L_eps, smooth_abs: the smoothing behind the transcription
+    rk4_quadrature         rk4_substeps and the quadrature scheme family
+    ad_tape                records the whole problem onto one AD tape
+    nlp_functions          presents that tape to SciPy, with caching and scaling
+    problem_scaling        the automatic objective/constraint scaling
+    sqp_solver             OCPSolver: the SLSQP driver and continuation loop
+"""
+
 from ._version import __version__
 
 _CPPAD_HINT = (
@@ -14,37 +35,24 @@ try:
 except ImportError as _exc:       # pragma: no cover - depends on the user's environment
     raise ImportError(f"{_exc}\n\n{_CPPAD_HINT}") from _exc
 
-# Directly exposed common APIs
-from .ocp_problem_builders import OCPProblem, DEFAULT_QUAD_SCHEME
-from .ocp_solver_builders import OCPSolver
-from .ocp_integrators_utils import (
-    rk4_substeps, rk4_step,
-    QuadScheme, QUAD_SCHEMES, quad_order, validate_quad_scheme,
-)
-from .ocp_function_builders import make_builders
-from .ocp_smooth_utils import L_eps, smooth_abs
-from .ocp_scaling_utils import ProblemScaling, compute_scaling, identity_scaling
+# ---- the everyday API ----
+from .problem_definition import OCPProblem
+from .sqp_solver import OCPSolver
+from .objective_builder import make_builders
+from .rk4_quadrature import rk4_substeps, QUAD_SCHEMES
+
+# ---- helpers a user genuinely writes into their own model functions ----
+# These are AD-safe by construction: they record CppAD conditional expressions
+# rather than resolving a Python branch once, at taping time.
+from .constraint_smoothing import L_eps, smooth_abs
 
 __all__ = [
     "__version__",
-    "OCPProblem", "OCPSolver", "make_builders",
-    "rk4_substeps", "rk4_step",
-    "QuadScheme", "QUAD_SCHEMES", "DEFAULT_QUAD_SCHEME",
-    "quad_order", "validate_quad_scheme",
-    "L_eps", "smooth_abs",
-    "ProblemScaling", "compute_scaling", "identity_scaling",
-    "ensure_cppad_or_warn",
+    "OCPProblem",
+    "OCPSolver",
+    "make_builders",
+    "rk4_substeps",
+    "QUAD_SCHEMES",
+    "L_eps",
+    "smooth_abs",
 ]
-
-
-def ensure_cppad_or_warn() -> bool:
-    """
-    Report whether cppad_py is importable. Prints the installation hint instead of
-    raising when it is not.
-    """
-    try:
-        import cppad_py  # noqa: F401
-    except ImportError:
-        print(f"[ADMISER] WARNING: {_CPPAD_HINT}")
-        return False
-    return True

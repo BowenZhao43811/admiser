@@ -1,4 +1,4 @@
-# ADMISER — Automatic Differentiation Ehanced Modern Control-Parametrization OCP Solver
+# ADMISER — Automatic Differentiation Enhanced Modern Control-Parametrization OCP Solver
 
 ADMISER is a **Numerical Optimal Control** toolkit that incorporates **Automatic Differentiation** for gradient computation within [Professor Kok Lay Teo](https://sunwayuniversity.edu.my/school-of-mathematical-sciences/staff-profiles/professor-teo-kok-lay)'s **Control Parametrization** framework in Python.
 
@@ -13,7 +13,7 @@ ADMISER is a **Numerical Optimal Control** toolkit that incorporates **Automatic
 - ✅ **Automatic Scaling**: objective and constraints are normalised internally so SLSQP's absolute `ftol` behaves as the relative tolerance users expect; every reported number comes back in your own units
 - ✅ **SQP** method for solving nonlinear programming problem
 
-> ⚠️ **Strict prerequest**: `cppad_py` requires a local build on Linux/WSL. ADMISER provides a helper script to build and install it.
+> ⚠️ **Strict prerequisite**: `cppad_py` requires a local build on Linux/WSL. ADMISER provides a helper script to build and install it.
 
 ---
 
@@ -36,16 +36,16 @@ ADMISER is a **Numerical Optimal Control** toolkit that incorporates **Automatic
 ## Install
 
 ### install WSL on Windows
-Install wsl and linux distributation.
+Install WSL and a Linux distribution.
 ```powershell
 # install system components for WSL
 wsl --install
-# install Linux distributation on WSL
+# install a Linux distribution on WSL
 wsl.exe --install Ubuntu
 ```
-> ⚠️ Minimum requirements for running the package are provided, for details on WSL please refer to Microsoft's official documentations.
+> ⚠️ Only the minimum requirements are given here; for details on WSL please refer to Microsoft's official documentation.
 
-Creat user in Linux system
+Create a user in the Linux system
 ```powershell
 Create a default Unix user account: ****** (Input your user name)
 # password won't show in Linux.
@@ -63,14 +63,14 @@ sudo apt update
 sudo apt upgrade -y
 ```
 
-### install Python Develope tools
-Install python, package management tools, vertial environment management tools, and python development tools on Linux `python3`, `pip`, `venv`, `dev`.
+### install Python development tools
+Install Python, package management tools, virtual environment management tools, and Python development tools on Linux `python3`, `pip`, `venv`, `dev`.
 ```sh
 sudo apt install -y python3 python3-pip python3-venv python3-dev
 ```
 
-### create venv.
-Create venv to Keep a clear global environment 
+### create a venv
+Create a venv to keep the global environment clean
 ```sh
 python3 -m venv ~/admiser_venv
 source ~/admiser_venv/bin/activate
@@ -90,11 +90,11 @@ pip install "admiser @ git+https://github.com/BowenZhao43811/admiser.git"
 ```sh
 admiser-install-cppad
 ```
-> ⚠️ Minimum requirements for running the package are provided, for details on CppAD and CppAD_Py please refer to COIN's official documentations.
+> ⚠️ Only the minimum requirements are given here; for details on CppAD and cppad_py please refer to COIN-OR's official documentation.
 
 ## Quickstart
 
-The jupyter notebook document `main_solver_entrence.ipynb` distributed together with the package records the solution results of many examples from different industries. Definitions of these example problems can be found in the `admiser.examples.ProblemName.py`
+The Jupyter notebook `main_solver_entrence.ipynb` distributed together with the package records the solution results of many examples from different industries. Definitions of these example problems can be found in the `admiser.examples.ProblemName.py`
 
 ### find the accompanying example solution 
 ```py
@@ -103,7 +103,7 @@ from admiser.examples import get_notebook_path
 path = get_notebook_path()
 print("Notebook path:", path)
 ```
-Grab the file path then open it with your prefered editor (don't forget to select your venv where admiser was installed).
+Grab the file path, then open it with your preferred editor (remember to select the venv where admiser is installed).
 
 ## Core Ideas
 
@@ -119,7 +119,7 @@ Grab the file path then open it with your prefered editor (don't forget to selec
 
 ### Problem define
 
-Create a problem file (e.g., `my_problem.py`) using the following simple template pattern (😊 Full template with all supported constraints `my_A_problem_temeplate.py` can be found in `admiser\templates`):
+Create a problem file (e.g., `my_problem.py`) using the following simple template pattern (😊 A full template covering every supported constraint, `my_A_problem_template.py`, is in `admiser/templates`):
 ```py
 import numpy as np
 from functools import partial
@@ -168,6 +168,36 @@ res = OCPSolver(problem).solve(maxiter=800, ftol=1e-9)
 print(res["J_opt"])
 ```
 
+### The public API
+
+The surface is deliberately small — almost every problem needs only these:
+
+```py
+from admiser import OCPProblem, OCPSolver, make_builders, rk4_substeps
+```
+
+| name | what it is |
+|---|---|
+| `OCPProblem` | the problem, and the policies for how it should be solved |
+| `OCPSolver` | `solve()` and `to_nlp()` |
+| `make_builders` | assembles $\int L\,dt + \Phi$ into an objective builder |
+| `rk4_substeps` | the substep integrator you pass as `integrator=` |
+| `QUAD_SCHEMES` | the quadrature schemes, their orders and costs |
+| `L_eps`, `smooth_abs` | AD-safe smoothing helpers, for use inside your own model functions |
+
+Everything else lives in a named module and can be imported from there:
+
+| module | contents |
+|---|---|
+| `admiser.problem_definition` | `OCPProblem` |
+| `admiser.objective_builder` | `make_builders` |
+| `admiser.constraint_smoothing` | `L_eps`, `smooth_abs` |
+| `admiser.rk4_quadrature` | `rk4_substeps`, `rk4_step`, `QUAD_SCHEMES`, `quad_order` |
+| `admiser.ad_tape` | `build_ad_tape` — records the whole problem onto one tape |
+| `admiser.nlp_functions` | `NLPFunctions` — that tape presented to SciPy |
+| `admiser.problem_scaling` | `compute_scaling`, `ProblemScaling` |
+| `admiser.sqp_solver` | `OCPSolver` |
+
 > ℹ️ **`solve()` is the only solve entry point.** Whether the path-constraint transcription is solved once or by an ε→0 continuation is declared *in the problem*, with `problem.set_transcription(...)` — see [Choosing ε and γ](#choosing-ε-and-γ). The result dict has the same shape either way.
 >
 > If you want the transcribed NLP *without* solving it — to check the AD gradient against finite differences, say — use `to_nlp()`:
@@ -176,7 +206,7 @@ print(res["J_opt"])
 > g_ad = nlp.objective_grad(z)
 > ```
 
-> ℹ️ **Figure Output**: States and control trajectories ploting is not integrated into the solver, instead, the flaxibility is given to the users. User can access raw optimization reaults of control, system parameters, objective, state, residual on the cononical equality and inequalities by 
+> ℹ️ **Figure Output**: Plotting of states and control trajectories is deliberately left out of the solver, so you keep full control over presentation. The raw optimisation results -- controls, system parameters, objective, states, and the residuals of the canonical equalities and inequalities -- are available as 
 `res["U_opt"]`
 `res.get("theta_opt", None)`
 `res["J_opt"]`
@@ -188,7 +218,7 @@ print(res["J_opt"])
 
 > ℹ️ `eq_resid` should be ≈ 0, `ineq_resid` is $C(z) \ge 0$, and `path_viol` gives $\max_t h(t)$ on the grid for each registered path inequality — the direct measure of how well the transcription held (should be ≤ 0).
 
-> 😊 However, a chart generator template `solve_A_my_problem_template.py` can be access in `admiser\templates`
+> 😊 A ready-made plotting driver, `solve_A_my_problem_template.py`, is available in `admiser/templates`
 
 
 ## Registering Constraints
@@ -212,7 +242,7 @@ User can define and registe following six type of constraints to the package and
 
 > ℹ️ **Note** Path constraints are transformed into integral form by applying the constraints transcription techniques.
 
-> 😊 Full template for all supported constraints `my_A_problem_temeplate.py` can be found in `admiser\templates`.
+> 😊 A full template covering every supported constraint, `my_A_problem_template.py`, is in `admiser/templates`.
 
 ## Choosing ε and γ
 
@@ -377,7 +407,7 @@ A scheme's order is capped by **both** the quadrature rule and the accuracy of t
 
 `'rk4'` is exactly RK4 applied to the augmented state $\dot y = L(t,x,u,θ)$, which is why $\int L\,dt$ comes out as accurate as the trajectory.
 
-Programmatic access: `admiser.QUAD_SCHEMES` (name → order / `n_eval` / summary), `admiser.quad_order(name)`, `admiser.validate_quad_scheme(name)`.
+Programmatic access: `admiser.QUAD_SCHEMES` maps each name to its order, `n_eval` and a one-line summary. `quad_order(name)` and `validate_quad_scheme(name)` live in `admiser.rk4_quadrature`.
 
 ## Writing AD-safe Model Functions
 
@@ -494,9 +524,9 @@ print(res["tau_opt"])                # where the segments ended up
 
 Theoretical Framework for control parametrization originally proposed by Professor Kok Lay Teo and other co-researchers can be found in:
 
-**Goh, C.J., & Teo, K.L.** (1988). *Control parametrization: a unifiedapproach to optimal control problems with general constraints*.**Automatica**, 24(1), 3–18.  
+**Goh, C.J., & Teo, K.L.** (1988). *Control parametrization: a unified approach to optimal control problems with general constraints*.**Automatica**, 24(1), 3–18.  
   
-**Goh, C.J., & Teo, K.L.** (1991). *Alternative algorithms for solvingnonlinear function and functional inequalities*. **Applied Mathematics andComputation**, 41(2), 159–177.  
+**Goh, C.J., & Teo, K.L.** (1991). *Alternative algorithms for solving nonlinear function and functional inequalities*. **Applied Mathematics and Computation**, 41(2), 159–177.  
 
 For the latest theoretical and computational methods based on control parameterization technology, please refer to the following monograph:
    

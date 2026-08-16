@@ -1,4 +1,4 @@
-# ocp_integrators_utils.py
+# rk4_quadrature.py
 """
 Substep RK4 integrator, and the family of schemes used to integrate quantities
 along the resulting trajectory.

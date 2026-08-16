@@ -1,13 +1,13 @@
-# ocp_solver_builders.py
+# sqp_solver.py
 
 import inspect
 
 import numpy as np
 from scipy.optimize import minimize
 
-from .ocp_ADfunction_tapes import build_ad_tape
-from .ocp_ADgradient_builders import optimize_fun_class
-from .ocp_scaling_utils import compute_scaling
+from .ad_tape import build_ad_tape
+from .nlp_functions import NLPFunctions
+from .problem_scaling import compute_scaling
 
 
 def _bind_dyn_numeric(dyn, theta):
@@ -177,18 +177,18 @@ class OCPSolver:
         self.taped = build_ad_tape(z0, self.problem)
 
         if not scaled:
-            self.opt_fun = optimize_fun_class(self.taped)
+            self.opt_fun = NLPFunctions(self.taped)
             return self.opt_fun
 
         if self.scaling is None:
             cfg = getattr(self.problem, "scaling", None) or {}
-            unscaled = optimize_fun_class(self.taped)
+            unscaled = NLPFunctions(self.taped)
             self.scaling = compute_scaling(
                 unscaled, z0, self.problem.make_bounds(),
                 objective=cfg.get("objective", "auto"),
                 constraints=cfg.get("constraints", "auto"),
             )
-        self.opt_fun = optimize_fun_class(self.taped, self.scaling)
+        self.opt_fun = NLPFunctions(self.taped, self.scaling)
         return self.opt_fun
 
     def _solve_once(self, z0, maxiter, ftol, disp):

@@ -1,11 +1,11 @@
-# ocp_ADgradient_builders.py
+# nlp_functions.py
 
 import numpy as np
 
-from .ocp_scaling_utils import identity_scaling
+from .problem_scaling import identity_scaling
 
 
-class optimize_fun_class:
+class NLPFunctions:
     """
     Present the taped NLP through the interface SciPy's minimize/SLSQP expects.
 

@@ -1,4 +1,4 @@
-# ocp_ADfunction_tapes.py
+# ad_tape.py
 """
 Record the optimal control problem onto a single AD tape.
 
@@ -37,7 +37,7 @@ from typing import NamedTuple
 import numpy as np
 import cppad_py
 
-from .ocp_smooth_utils import L_eps, smooth_abs
+from .constraint_smoothing import L_eps, smooth_abs
 
 
 class TapedNLP(NamedTuple):

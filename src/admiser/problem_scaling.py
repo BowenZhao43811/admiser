@@ -1,4 +1,4 @@
-# ocp_scaling_utils.py
+# problem_scaling.py
 """
 Automatic problem scaling.
 
@@ -176,7 +176,7 @@ def compute_scaling(unscaled_nlp, z0, bounds, objective="auto", constraints="aut
 
     Parameters
     ----------
-    unscaled_nlp : an optimize_fun_class built WITHOUT scaling, i.e. presenting the
+    unscaled_nlp : an NLPFunctions built WITHOUT scaling, i.e. presenting the
                    problem in the user's own units. Everything measured here is
                    therefore measured on what the user actually wrote.
     z0           : the initial guess, the point the probes are built around

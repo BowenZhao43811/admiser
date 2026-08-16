@@ -1,10 +1,10 @@
-# ocp_problem_builders.py
+# problem_definition.py
 from contextlib import contextmanager
 
 import numpy as np
 import cppad_py
 
-from .ocp_integrators_utils import validate_quad_scheme
+from .rk4_quadrature import validate_quad_scheme
 
 #: Package-wide default quadrature scheme: 4th order, matching the state
 #: integrator, and costing no extra dynamics evaluations.
@@ -86,7 +86,7 @@ class OCPProblem:
         self.path_eq_specs   = []  # path equality h(t)=0 -> int h^2 dt = 0, or int smooth|h| dt = 0
         self.path_ineq_specs = []  # path inequality h<=0 -> int L_eps(h) dt <= gamma
 
-        # Substep quadrature scheme; see ocp_integrators_utils.QUAD_SCHEMES.
+        # Substep quadrature scheme; see rk4_quadrature.QUAD_SCHEMES.
         # None means "unspecified", in which case the quad carried by
         # objective_builder decides (see resolve_quad_scheme). Setting it
         # explicitly overrides that and applies to the objective and all
@@ -96,7 +96,7 @@ class OCPProblem:
         # Solve strategy for the path-constraint transcription; see set_transcription().
         self.transcription = dict(mode="single", n_rounds=1, shrink=0.1)
 
-        # Automatic problem scaling; see set_scaling() and ocp_scaling_utils.
+        # Automatic problem scaling; see set_scaling() and problem_scaling.
         # On by default, because the failure it prevents is silent: SLSQP's ftol is
         # an absolute test, so a badly scaled objective makes it stop early at a
         # point that may not even be feasible.
@@ -142,7 +142,7 @@ class OCPProblem:
         that absolute test into an effectively relative one.
 
         The two are scaled by different rules, for different reasons; see the
-        module docstring of ocp_scaling_utils for the details.
+        module docstring of problem_scaling for the details.
         """
         if constraints not in ("auto", "none"):
             raise ValueError(

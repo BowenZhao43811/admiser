@@ -1,5 +1,6 @@
 [build-system]
-requires = ["setuptools", "wheel"]
+# license-files (PEP 639) needs setuptools >= 77
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -9,14 +10,38 @@ dynamic = ["version"]
 description = "A unified optimal control problem solver inspired by Teo's control parametrization approaches enhanced by automatic differentiation"
 readme = "README.md"
 license = "MIT"
+license-files = ["LICENSE"]
 authors = [{name = "Bowen Zhao"}]
-# `X | None` runtime annotations (used in ocp_problem_builders.py) need 3.10
+# `X | None` runtime annotations (used in problem_definition.py) need 3.10
 requires-python = ">=3.10"
+keywords = [
+  "optimal control",
+  "control parametrization",
+  "automatic differentiation",
+  "trajectory optimization",
+  "nonlinear programming",
+  "CppAD",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Mathematics",
+]
 dependencies = [
   "numpy",
   "scipy",
   "matplotlib"
 ]
+
+[project.urls]
+Homepage = "https://github.com/BowenZhao43811/admiser"
+Repository = "https://github.com/BowenZhao43811/admiser"
+Issues = "https://github.com/BowenZhao43811/admiser/issues"
 
 [project.optional-dependencies]
 # Everything needed to run the test suite. Install with:  pip install -e ".[dev]"

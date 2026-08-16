@@ -1,4 +1,4 @@
-# my_A_problem_temeplate.py
+# my_A_problem_template.py
 # General OCP problem template: the objective and the constraints are decoupled,
 # and all constraints are registered in canonical form.
 import numpy as np

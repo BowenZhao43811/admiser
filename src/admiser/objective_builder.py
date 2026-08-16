@@ -1,4 +1,4 @@
-# ocp_function_builders.py
+# objective_builder.py
 r"""
 make_builders only builds the objective_builder, i.e. \int L dt + Phi.
 
@@ -14,7 +14,7 @@ import numpy as np
 import cppad_py
 import inspect
 
-from .ocp_problem_builders import DEFAULT_QUAD_SCHEME
+from .problem_definition import DEFAULT_QUAD_SCHEME
 
 
 def _bind_dyn_with_theta_ad(dyn, atheta):
@@ -40,7 +40,7 @@ def make_builders(
     objective_builder(au, atheta, problem) -> np.array([J], dtype=object)
 
     `quad` is this objective's default substep quadrature scheme; the available
-    names and their orders are in ocp_integrators_utils.QUAD_SCHEMES. If the
+    names and their orders are in rk4_quadrature.QUAD_SCHEMES. If the
     problem sets problem.quad_scheme explicitly, that wins -- the objective and
     every constraint must share one scheme, otherwise SLSQP sees them built on
     different discretisations and the resulting KKT point is meaningless.

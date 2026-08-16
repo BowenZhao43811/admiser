@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 
 from admiser import OCPSolver
 
-from my_A_problem_temeplate import problem, N, dt
+from my_A_problem_template import problem, N, dt
 
 def main():
     # The only solve entry point. Whether this is a single solve or an eps -> 0

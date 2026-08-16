@@ -21,7 +21,7 @@ from functools import partial
 
 from admiser import (OCPProblem, OCPSolver, QUAD_SCHEMES, make_builders,
                      rk4_substeps)
-from admiser.ocp_integrators_utils import _quad_samples
+from admiser.rk4_quadrature import _quad_samples
 
 # ---------------------------------------------------------------------------
 # Reference problem with a closed-form answer

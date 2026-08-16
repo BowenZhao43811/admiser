@@ -1,4 +1,4 @@
-# ocp_smooth_utils.py
+# constraint_smoothing.py
 import numpy as np
 import cppad_py
 
