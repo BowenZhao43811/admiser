@@ -109,5 +109,7 @@ for _h in PATH_INEQS:
 # eps is the FINAL value; the rounds run 1e0 -> 1e-1 -> 1e-2, warm-started,
 # with all four constraints shrinking together.
 problem.set_transcription(mode="continuation", n_rounds=3, shrink=0.1)
+# noscaling on objective and constraints
+problem.set_scaling(objective="none", constraints="none")
 
 __all__ = ["problem", "T", "N", "dt", "PATH_INEQS"]
