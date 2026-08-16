@@ -22,8 +22,12 @@ def main():
     eq_res = res.get("eq_resid", None)   # equality residual G(z), should be ~ 0
     in_res = res.get("ineq_resid", None) # inequality residual C(z), should be >= 0
     viol   = res.get("path_viol", None)  # max h(t) on the grid per path constraint, should be <= 0
+    sc     = res.get("scaling", None)    # the scaling that was applied; every value
+                                         # above is already back in your own units
 
     print("\n=== results ===")
+    if sc is not None and not sc.is_identity:
+        print("(solved with automatic scaling:", sc.describe().splitlines()[0], ")")
     print("J* =", J_opt)
     if theta is not None:
         print("theta* =", theta)

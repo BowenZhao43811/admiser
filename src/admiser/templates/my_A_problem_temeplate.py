@@ -169,5 +169,23 @@ problem.set_transcription(mode="continuation", n_rounds=4, shrink=0.1)
 #
 # problem.set_time_scaling(tau0=dt, tau_min=0.0, tau_max=None, total_time=T)
 
-# ============= 12) exports =============
+# ============= 12) optional: automatic scaling =============
+# ON by default -- you do not need this line at all. Write L and your constraints
+# in whatever units are natural for your problem; the solver normalises them
+# internally and converts everything it reports back into your units.
+#
+# Why it is on: SLSQP's ftol compares the ABSOLUTE change in the objective. With
+# an objective of order 1e6, ftol=1e-9 asks for 1e-15 relative accuracy, below
+# machine precision, so the line search gives up after a few iterations -- at a
+# point that may be infeasible, and with no error raised. Normalising turns that
+# absolute test into an effectively relative one. Constraint rows are scaled by
+# 1/||grad g_i|| for a different reason: to condition the QP subproblem.
+#
+# solve() prints one line saying what factors it used. res["scaling"] holds them.
+#
+# problem.set_scaling(objective="auto", constraints="auto")   # the default
+# problem.set_scaling(objective="none", constraints="none")   # switch it all off
+# problem.set_scaling(objective=1e-6)                         # pick the factor yourself
+
+# ============= 13) exports =============
 __all__ = ["problem", "N", "dt", "T"]

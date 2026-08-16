@@ -2,6 +2,8 @@
 
 import numpy as np
 
+from .ocp_scaling_utils import identity_scaling
+
 
 class optimize_fun_class:
     """
@@ -11,6 +13,14 @@ class optimize_fun_class:
     [J ; G ; C], so a single forward sweep yields the objective AND every
     constraint, and a single Jacobian yields every derivative. This class slices
     that one result into the six callbacks SciPy asks for.
+
+    Scaling
+    -------
+    The tape always holds the problem in the USER's units. Any rescaling is applied
+    here, on the way out to SciPy, and nowhere else; the solver converts the
+    numbers it reports back with ProblemScaling.*_to_user. Keeping the tape
+    unscaled is what lets to_nlp() hand back the user's own problem and lets the
+    scaling change without re-recording anything.
 
     Caching
     -------
@@ -30,12 +40,16 @@ class optimize_fun_class:
     ineq_jac(z)       -> dC/dz, shape (n_ineq, n)
     """
 
-    def __init__(self, taped):
+    def __init__(self, taped, scaling=None):
         self.taped = taped
         self.fun = taped.fun
 
         self.n_eq = taped.n_eq
         self.n_ineq = taped.n_ineq
+
+        # None means "present the problem exactly as taped".
+        self.scaling = scaling if scaling is not None else identity_scaling(
+            taped.n_eq, taped.n_ineq)
 
         # Row ranges of the three blocks inside the stacked output vector.
         self._obj = taped.obj_slice
@@ -75,31 +89,36 @@ class optimize_fun_class:
         return self._jacobian
 
     # ---- objective ----
+    # A single positive factor: it cannot move the minimiser, it only changes what
+    # SLSQP's absolute ftol test means.
     def objective_fun(self, z):
-        return float(self._all_values(z)[self._obj][0])
+        return float(self._all_values(z)[self._obj][0]) * self.scaling.objective
 
     def objective_grad(self, z):
-        return self._all_jacobian(z)[self._obj].flatten()
+        return self._all_jacobian(z)[self._obj].flatten() * self.scaling.objective
 
     # ---- equality constraints (empty arrays when the problem has none) ----
+    # Row scaling: g_i = 0 and s_i*g_i = 0 describe the same set for any s_i > 0,
+    # so the feasible set is untouched; only the QP's conditioning changes.
     def eq_fun(self, z):
         if not self.has_eq:
             return np.array([], dtype=float)
-        return self._all_values(z)[self._eq]
+        return self._all_values(z)[self._eq] * self.scaling.eq
 
     def eq_jac(self, z):
         if not self.has_eq:
             return np.zeros((0, np.asarray(z).size))
-        return self._all_jacobian(z)[self._eq]
+        # one factor per row, so it multiplies down the rows
+        return self._all_jacobian(z)[self._eq] * self.scaling.eq[:, None]
 
     # ---- inequality constraints ----
     # SciPy convention: type='ineq' requires fun(z) >= 0
     def ineq_fun(self, z):
         if not self.has_ineq:
             return np.array([], dtype=float)
-        return self._all_values(z)[self._ineq]
+        return self._all_values(z)[self._ineq] * self.scaling.ineq
 
     def ineq_jac(self, z):
         if not self.has_ineq:
             return np.zeros((0, np.asarray(z).size))
-        return self._all_jacobian(z)[self._ineq]
+        return self._all_jacobian(z)[self._ineq] * self.scaling.ineq[:, None]

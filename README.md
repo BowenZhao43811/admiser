@@ -10,6 +10,7 @@ ADMISER is a **Numerical Optimal Control** toolkit that incorporates **Automatic
 - ✅ **Multi-substep RK4** integrator with **4th-order** substep quadrature (cost integrals are as accurate as the state trajectory, at no extra dynamics evaluations)
 - ✅ **System Parameters** are simultaneously optimized within the same framework (if have)
 - ✅ **Automatic Differentiation** via `cppad_py` tapes (objective + constraints Jacobians)
+- ✅ **Automatic Scaling**: objective and constraints are normalised internally so SLSQP's absolute `ftol` behaves as the relative tolerance users expect; every reported number comes back in your own units
 - ✅ **SQP** method for solving nonlinear programming problem
 
 > ⚠️ **Strict prerequest**: `cppad_py` requires a local build on Linux/WSL. ADMISER provides a helper script to build and install it.
@@ -23,6 +24,7 @@ ADMISER is a **Numerical Optimal Control** toolkit that incorporates **Automatic
 - [Problem Template](#problem-template)
 - [Registering Constraints](#registering-constraints)
 - [Choosing ε and γ](#choosing-ε-and-γ)
+- [Automatic Scaling](#automatic-scaling)
 - [Quadrature Accuracy](#quadrature-accuracy)
 - [Writing AD-safe Model Functions](#writing-ad-safe-model-functions)
 - [Time Scaling (CPET)](#time-scaling-cpet)
@@ -257,6 +259,84 @@ The starting ε is given as a **ratio**, not an absolute value: ε carries the u
 `mode="single"` (the default, and what you get if you never call `set_transcription`) is simply the one-round case, so both modes go through the same code path and return the same result shape — `rounds` just has length 1. `gamma` is re-derived as $Tε/4$ each round for constraints registered without an explicit `gamma`; an explicitly given `gamma` stays fixed. `eps` is baked into the tape as a constant, so each round re-records the tape (cheap relative to the SQP iterations).
 
 `solve()` never mutates the problem: ε is only scaled inside the round and restored afterwards, so the same `problem` can be solved repeatedly with identical results.
+
+## Automatic Scaling
+
+**On by default.** Write your objective and constraints in whatever units are
+natural for the problem; the solver normalises them internally and converts
+everything it reports back into your units.
+
+### Why
+
+SciPy's SLSQP compares the **absolute** change in the objective against `ftol`.
+With an objective of order $10^6$, `ftol=1e-9` demands a relative accuracy of
+$10^{-15}$ — below machine precision — so the line search reports "no descent
+direction" after a handful of iterations and stops, possibly at an **infeasible**
+point, with no error raised.
+
+That was not hypothetical. `my_medical1` has an objective of order $2.5\times10^6$
+and used to halt after 9 iterations with its dose budget violated by $10^{-2}$.
+Sweeping `ftol` from `1e-12` to `1e0` changed nothing — the tolerance was simply
+inoperative.
+
+Multiplying the objective by a positive constant cannot move the minimiser, but
+it does change what `ftol` means. **Normalising turns SLSQP's absolute test into
+an effectively relative one** — which is what most people assume `ftol` already is.
+
+### Two rules, one idea
+
+The objective and the constraints are deliberately **not** scaled by the same
+formula:
+
+| | scaled by | measured from | fixes |
+|---|---|---|---|
+| objective | one global factor $1/\lvert J\rvert$ | the **value** at the initial guess | `ftol` being an absolute test |
+| constraints | one factor **per row** $1/\lVert\nabla g_i\rVert_\infty$ | the **Jacobian** | conditioning of the QP subproblem |
+
+Normalising a constraint by its *value* would be wrong: a constraint that happens
+to be satisfied at the starting point has $g_i \approx 0$ there, and that is
+normal, even desirable.
+
+### Usage
+
+```py
+problem.set_scaling(objective="auto", constraints="auto")   # the default
+problem.set_scaling(objective="none", constraints="none")   # switch it off
+problem.set_scaling(objective=1e-6)                         # pick the factor yourself
+```
+
+`solve()` prints one line stating what it did, and `res["scaling"]` carries the
+factors, so the transform is never invisible:
+
+```
+[ADMISER] scaling applied: objective x3.900e-07 (auto); constraints 1/2 rows scaled, factors in [1.00e+00, 4.00e+00] (auto)
+[ADMISER]   all reported values are converted back to your units
+```
+
+### What it changed
+
+All thirteen examples now converge with `status=0` at a feasible point. The two
+that previously did not:
+
+| example | before | after |
+|---|---|---|
+| `my_medical1` | status 8, 9 iterations, budget violated by $10^{-2}$ | status 0, feasible to $6\times10^{-14}$ |
+| `my_medical2` | status 8, violation $6\times10^{-7}$ | status 0, feasible to $1\times10^{-13}$ |
+
+Neither example carries a hand-written scale factor — both state their objectives
+in natural units.
+
+Constraint scaling on its own is a smaller effect: measured across all examples it
+saves about 8% of the total iterations, with one problem
+(`my_free_terminal_time2`) taking half as many and none becoming less feasible.
+
+> ℹ️ The tape always holds **your** problem, unscaled. Scaling is applied only at
+> the boundary with SciPy, so `to_nlp()` hands back your own problem — a gradient
+> checked there against finite differences is the gradient of what you wrote.
+
+> ℹ️ The factors are estimated from **fixed** probe offsets around the initial
+> guess, never random ones, so the same problem always produces the same factors
+> and two runs are comparable.
 
 ## Quadrature Accuracy
 

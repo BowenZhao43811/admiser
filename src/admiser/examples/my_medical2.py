@@ -1,6 +1,6 @@
 # my_medical2.py -- COVID-19 SEIR optimal control
 # u1 = vaccination rate, u2 = contact-reduction intensity
-import numpy as np, cppad_py
+import numpy as np
 from functools import partial
 
 from admiser import OCPProblem
@@ -83,7 +83,10 @@ problem.quad_scheme = 'rk4'
 # 1) path inequality: I(t) <= I_cap, i.e. h = I - I_cap <= 0 -> int L_eps(h) dt <= gamma
 I_cap = 0.02
 def h_peak_I(t, x, u, theta):
-    return x[2] - cppad_py.a_double(I_cap)   # x[2] = I
+    # Plain arithmetic, no explicit a_double: this function is also evaluated on
+    # the float trajectory to report the true violation (result["path_viol"]),
+    # and wrapping the constant in an a_double would break that path.
+    return x[2] - I_cap   # x[2] = I
 problem.add_path_ineq(h_peak_I, eps=1e-2, gamma=0.25e-2)
 
 # 2) integral inequality: cumulative vaccine doses <= budget.

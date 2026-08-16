@@ -7,6 +7,7 @@ from scipy.optimize import minimize
 
 from .ocp_ADfunction_tapes import build_ad_tape
 from .ocp_ADgradient_builders import optimize_fun_class
+from .ocp_scaling_utils import compute_scaling
 
 
 def _bind_dyn_numeric(dyn, theta):
@@ -50,6 +51,9 @@ class OCPSolver:
     path_viol    : ndarray, max h(t) on the grid for each path inequality, should be <= 0
                    (None if there are none)
     history_cost : ndarray, cost history of the final round's iterations
+    scaling      : the ProblemScaling that was applied. Every value above is
+                   already converted back into the user's units; this is here so
+                   the transform is inspectable rather than invisible
     rounds       : list[dict], per round: eps, gamma, J_opt, max_path_viol, status, nit.
                    Length 1 in "single" mode, so callers never need to branch on the mode.
 
@@ -63,6 +67,11 @@ class OCPSolver:
         self.problem = problem
         self.taped = None      # the TapedNLP recorded by _build_tape()
         self.opt_fun = None    # SciPy-facing view of that tape
+        # Scaling factors, computed once on the first tape and then FROZEN. They
+        # must not be re-estimated per continuation round: each round would then
+        # optimise a differently scaled problem, the warm start would lose its
+        # meaning, and the per-round objectives would not be comparable.
+        self.scaling = None
         self.history_cost = []
 
     # ================= public interface =================
@@ -90,12 +99,19 @@ class OCPSolver:
 
         z = p.initial_guess() if z0 is None else np.asarray(z0, dtype=float)
         rounds, res = [], None
+        announced = False
 
         for k, factor in enumerate(factors):
             # eps is scaled only inside this with-block and restored on exit, so
             # spec["eps"] always keeps the value the user registered.
             with p.scaled_eps(factor=factor):
                 self._build_tape()
+                # Say once, up front, that the numbers were rescaled and by how
+                # much. An automatic transform that changes the iteration history
+                # must never be invisible.
+                if verbose and not announced:
+                    print(self.scaling.describe())
+                    announced = True
                 res = self._solve_once(z, maxiter=maxiter, ftol=ftol, disp=disp)
                 z = res["scipy_result"].x
                 eps_now = [p.effective_eps(s) for s in p.path_ineq_specs]
@@ -109,8 +125,11 @@ class OCPSolver:
                                nit=res["scipy_result"].nit))
             if verbose:
                 e = f"{min(eps_now):.3e}" if eps_now else "-"
+                # max_viol is nan when the diagnostic could not be evaluated (a
+                # hfun that only accepts AD types); say so rather than print nan.
+                v = "n/a" if not np.isfinite(max_viol) else f"{max_viol:+.3e}"
                 print(f"[ADMISER] round {k+1}/{len(factors)}  eps={e}  "
-                      f"J={res['J_opt']:+.8g}  max h(t)={max_viol:+.3e}  "
+                      f"J={res['J_opt']:+.8g}  max h(t)={v}  "
                       f"status={res['scipy_result'].status}  nit={res['scipy_result'].nit}")
 
         res["rounds"] = rounds
@@ -136,19 +155,40 @@ class OCPSolver:
         p = self.problem
         factor = p.eps_factors()[0]
         with p.scaled_eps(factor=factor, override=eps):
-            self._build_tape()
+            # Deliberately unscaled: this is meant to be the user's own problem,
+            # so a gradient checked against finite differences here is a gradient
+            # of what the user wrote, not of an internally rescaled version.
+            self._build_tape(scaled=False)
         return self.opt_fun
 
     # ================= internals =================
 
-    def _build_tape(self):
+    def _build_tape(self, scaled=True):
         """
         Record the AD tape. eps is baked into it as a constant, which is why every
         continuation round has to re-record.
+
+        The tape itself is always in the user's units. When `scaled` is set, the
+        SciPy-facing view multiplies by the frozen scaling factors on the way out;
+        those factors are estimated once, from an UNSCALED view of the first tape,
+        so they describe the problem as the user wrote it.
         """
         z0 = self.problem.initial_guess()
         self.taped = build_ad_tape(z0, self.problem)
-        self.opt_fun = optimize_fun_class(self.taped)
+
+        if not scaled:
+            self.opt_fun = optimize_fun_class(self.taped)
+            return self.opt_fun
+
+        if self.scaling is None:
+            cfg = getattr(self.problem, "scaling", None) or {}
+            unscaled = optimize_fun_class(self.taped)
+            self.scaling = compute_scaling(
+                unscaled, z0, self.problem.make_bounds(),
+                objective=cfg.get("objective", "auto"),
+                constraints=cfg.get("constraints", "auto"),
+            )
+        self.opt_fun = optimize_fun_class(self.taped, self.scaling)
         return self.opt_fun
 
     def _solve_once(self, z0, maxiter, ftol, disp):
@@ -170,9 +210,14 @@ class OCPSolver:
         )
 
         U_opt, theta_opt, tau_opt = self.problem.split_decision(res.x)
-        J_opt = self.opt_fun.objective_fun(res.x)
-        eq_resid   = self.opt_fun.eq_fun(res.x)   if self.opt_fun.has_eq   else None
-        ineq_resid = self.opt_fun.ineq_fun(res.x) if self.opt_fun.has_ineq else None
+
+        # Everything below is converted back into the user's units. The arithmetic
+        # lives in ProblemScaling so that these several call sites cannot drift
+        # apart on which way the conversion goes.
+        sc = self.opt_fun.scaling
+        J_opt = sc.objective_to_user(self.opt_fun.objective_fun(res.x))
+        eq_resid   = sc.eq_to_user(self.opt_fun.eq_fun(res.x)) if self.opt_fun.has_eq else None
+        ineq_resid = sc.ineq_to_user(self.opt_fun.ineq_fun(res.x)) if self.opt_fun.has_ineq else None
         t_opt, X_opt = self._numeric_rollout(U_opt, theta_opt, tau_opt)
 
         return dict(
@@ -181,7 +226,8 @@ class OCPSolver:
             T_opt=(None if tau_opt is None else float(np.sum(tau_opt))),
             t_opt=t_opt, X_opt=X_opt, eq_resid=eq_resid, ineq_resid=ineq_resid,
             path_viol=self._path_violation(t_opt, X_opt, U_opt, theta_opt),
-            history_cost=np.array(self.history_cost),
+            history_cost=sc.objective_to_user(np.array(self.history_cost)),
+            scaling=sc,
         )
 
     def _path_violation(self, t, X, U, theta):

@@ -23,6 +23,7 @@ from .ocp_integrators_utils import (
 )
 from .ocp_function_builders import make_builders
 from .ocp_smooth_utils import L_eps, smooth_abs
+from .ocp_scaling_utils import ProblemScaling, compute_scaling, identity_scaling
 
 __all__ = [
     "__version__",
@@ -31,6 +32,7 @@ __all__ = [
     "QuadScheme", "QUAD_SCHEMES", "DEFAULT_QUAD_SCHEME",
     "quad_order", "validate_quad_scheme",
     "L_eps", "smooth_abs",
+    "ProblemScaling", "compute_scaling", "identity_scaling",
     "ensure_cppad_or_warn",
 ]
 

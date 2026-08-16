@@ -96,6 +96,12 @@ class OCPProblem:
         # Solve strategy for the path-constraint transcription; see set_transcription().
         self.transcription = dict(mode="single", n_rounds=1, shrink=0.1)
 
+        # Automatic problem scaling; see set_scaling() and ocp_scaling_utils.
+        # On by default, because the failure it prevents is silent: SLSQP's ftol is
+        # an absolute test, so a badly scaled objective makes it stop early at a
+        # point that may not even be feasible.
+        self.scaling = dict(objective="auto", constraints="auto")
+
         # Time-scaling transform (CPET); None until set_time_scaling() is called.
         # See that method for what it does and why.
         self.time_scaling = None
@@ -110,6 +116,45 @@ class OCPProblem:
         # in spec["eps"] always stays exactly what the user wrote.
         self._eps_factor = 1.0
         self._eps_override = None
+
+    # ---------- automatic scaling ----------
+    def set_scaling(self, objective="auto", constraints="auto") -> "OCPProblem":
+        """
+        Choose how the problem is rescaled before it is handed to SLSQP.
+
+        Both are "auto" by default. Write your objective and constraints in
+        whatever units are natural for your problem; the solver normalises them
+        internally and converts everything it reports back into your units.
+
+        objective : "auto"  normalise |J| to about 1, estimated from a few fixed
+                            probe points around the initial guess
+                    "none"  leave it alone
+                    a positive number to set the factor yourself
+        constraints : "auto" scale each constraint ROW by 1/||grad g_i||
+                      "none" leave them alone
+
+        Why this is on by default
+        -------------------------
+        SLSQP's ftol compares the ABSOLUTE change in the objective. With an
+        objective of order 1e6, ftol=1e-9 demands 1e-15 relative accuracy, below
+        machine precision, and the line search gives up after a few iterations --
+        at a point that may be infeasible, with no error raised. Normalising turns
+        that absolute test into an effectively relative one.
+
+        The two are scaled by different rules, for different reasons; see the
+        module docstring of ocp_scaling_utils for the details.
+        """
+        if constraints not in ("auto", "none"):
+            raise ValueError(
+                f"constraints scaling must be 'auto' or 'none', got {constraints!r}")
+        if not (objective in ("auto", "none")
+                or (isinstance(objective, (int, float)) and not isinstance(objective, bool)
+                    and objective > 0.0)):
+            raise ValueError(
+                f"objective scaling must be 'auto', 'none' or a positive number, "
+                f"got {objective!r}")
+        self.scaling = dict(objective=objective, constraints=constraints)
+        return self
 
     # ---------- time-scaling transform (CPET) ----------
     def set_time_scaling(self, tau0=None, tau_min=0.0, tau_max=None,
