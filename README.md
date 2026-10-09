@@ -59,11 +59,10 @@ source ~/admiser_venv/bin/activate
 pip install "admiser @ git+https://github.com/BowenZhao43811/admiser.git"
 ```
 
-Or, from a clone of the repository — editable, together with the test tools — and
-check that everything works:
+Or, from a clone of the repository, as an editable install (changes to the source
+take effect without reinstalling):
 ```sh
-pip install -e ".[dev]"
-pytest
+pip install -e .
 ```
 
 > ⚠️ **Python version requirement**: Python ≥ 3.10 (enforced by `requires-python`). `pip` installs the newest JAX your Python supports; JAX 0.11 needs Python ≥ 3.12, and on 3.10 / 3.11 `pip` falls back to an older JAX by itself.
