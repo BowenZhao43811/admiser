@@ -6,4 +6,4 @@ build/
 *.egg-info/
 # coverage data written by `coverage run` / pytest-cov
 .coverage
-Test*
+tests/
