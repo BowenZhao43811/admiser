@@ -14,12 +14,12 @@ Run just this file with:
 """
 
 import importlib
-from functools import partial
 
 import numpy as np
+import jax.numpy as jnp
 import pytest
 
-from admiser import OCPProblem, OCPSolver, make_builders, rk4_substeps
+from admiser import OCPProblem, OCPSolver, make_builders
 
 
 # ---------------------------------------------------------------------------
@@ -28,7 +28,7 @@ from admiser import OCPProblem, OCPSolver, make_builders, rk4_substeps
 # ---------------------------------------------------------------------------
 def _toy_problem(N=5, dt=0.2, ntheta=0):
     def dyn(x, u, theta=None):
-        return np.array([u[0]], dtype=object)
+        return jnp.array([u[0]])
 
     def L(t, x, u, theta):
         return x[0] * x[0] + u[0] * u[0]
@@ -37,7 +37,7 @@ def _toy_problem(N=5, dt=0.2, ntheta=0):
         N=N, dt=dt,
         x0=np.array([1.0]), u0=0.0,
         dyn=dyn,
-        integrator=partial(rk4_substeps, m_sub=4),
+        m_sub=4,
         nu=1, nx=1,
         objective_builder=make_builders(dyn=dyn, L=L, Phi=None, quad='rk4'),
         control_bounds_builder=lambda p: [(-5.0, 5.0)] * (p.N * p.nu),
@@ -102,9 +102,9 @@ def test_uniform_durations_reproduce_the_untransformed_problem():
     the fixed grid would have used.
 
     This is the sharpest structural check available: it exercises the whole
-    transformed path -- the extra decision block, dt_of_segment returning an
-    a_double, the quadrature weights becoming functions of tau -- and demands the
-    same number as the plain formulation.
+    transformed path -- the extra decision block, the durations read out of z,
+    the quadrature weights becoming functions of tau -- and demands the same
+    number as the plain formulation.
     """
     plain = _toy_problem(N=6, dt=0.25)
     scaled = _toy_problem(N=6, dt=0.25)

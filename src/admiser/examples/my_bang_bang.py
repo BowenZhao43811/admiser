@@ -1,10 +1,9 @@
 # my_bang_bang.py -- canonical-constraint version (this problem has no constraints)
 
 import numpy as np
-from functools import partial
+import jax.numpy as jnp
 
 from admiser import OCPProblem
-from admiser import rk4_substeps
 from admiser import make_builders  # builds the objective_builder only
 
 # --- grid / dimensions ---
@@ -25,7 +24,7 @@ def dyn(x, u, theta=None):
     u1, u2 = u
     dx1 = u2
     dx2 = -x1 + u1
-    return np.array([dx1, dx2], dtype=object)
+    return jnp.array([dx1, dx2])
 
 # --- integrand L(t, x, u) ---
 # J = int_0^1 ( -6*x1 - 12*x2 + 3*u1 + u2 ) dt
@@ -51,7 +50,7 @@ problem = OCPProblem(
     x0=x0,                # no xT; no terminal, path or integral constraints here
     u0 = u0,
     dyn=dyn,
-    integrator=partial(rk4_substeps, m_sub=10),
+    m_sub=10,             # RK4 substeps per segment
     nu=nu, nx=nx,
     objective_builder=objective_builder,
     control_bounds_builder=control_bounds_builder,

@@ -70,7 +70,8 @@ def central_difference_jacobian(fun, z, h=1e-6):
         dfun/dz_i ~ [fun(z + h*e_i) - fun(z - h*e_i)] / (2h)
 
     This is the independent reference the AD gradient is compared against: it
-    uses nothing but function values, so it shares no code with the AD tape.
+    uses nothing but function values, so it shares no code with the automatic
+    differentiation.
 
     Returns an array of shape (len(fun(z)), len(z)).
     """

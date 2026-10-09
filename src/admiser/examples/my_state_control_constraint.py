@@ -1,10 +1,9 @@
 # my_state_control_constraint.py -- a mixed state-and-control path constraint
 
 import numpy as np
-from functools import partial
+import jax.numpy as jnp
 
 from admiser import OCPProblem
-from admiser import rk4_substeps
 from admiser import make_builders  # builds int L dt only
 
 # ===== grid =====
@@ -26,10 +25,10 @@ def dyn(x, u, theta):
     dx2/dt = -x1 + x2*(1.4 - 0.14*x2^2) + 4*u
     """
     x1, x2 = x
-    uu     = u[0]              # a_double or float
+    uu     = u[0]
     dx1 = x2
     dx2 = -x1 + x2 * (1.4 - 0.14* x2*x2) + 4 * uu
-    return np.array([dx1, dx2], dtype=object)
+    return jnp.array([dx1, dx2])
 
 # ===== objective L: int (x1^2 + u^2) dt =====
 def L(t, x, u, theta):
@@ -54,14 +53,12 @@ def control_bounds_builder(problem: OCPProblem):
     return [(-20.0, 20.0)] * (problem.N * problem.nu)
 
 # ===== assemble the problem (multi-substep RK4 for stability) =====
-substepped_rk4 = partial(rk4_substeps, m_sub=20)
-
 problem = OCPProblem(
     N=N, dt=dt,
     x0=x0,
     u0 = u0,
     dyn=dyn,
-    integrator=substepped_rk4,
+    m_sub=20,              # RK4 substeps per segment
     nu=nu, nx=nx,
     objective_builder=objective_builder,
     control_bounds_builder=control_bounds_builder,

@@ -13,12 +13,12 @@ Run just this file with:
 """
 
 import importlib
-from functools import partial
 
 import numpy as np
+import jax.numpy as jnp
 import pytest
 
-from admiser import OCPProblem, OCPSolver, make_builders, rk4_substeps
+from admiser import OCPProblem, OCPSolver, make_builders
 from admiser.problem_scaling import compute_scaling, identity_scaling
 
 
@@ -28,7 +28,7 @@ def _toy_problem(objective_magnitude=1.0):
     problem can be presented at wildly different scales.
     """
     def dyn(x, u, theta=None):
-        return np.array([u[0]], dtype=object)
+        return jnp.array([u[0]])
 
     def L(t, x, u, theta):
         return objective_magnitude * (x[0]*x[0] + u[0]*u[0])
@@ -37,7 +37,7 @@ def _toy_problem(objective_magnitude=1.0):
         N=8, dt=0.125,
         x0=np.array([1.0]), u0=0.0,
         dyn=dyn,
-        integrator=partial(rk4_substeps, m_sub=4),
+        m_sub=4,
         nu=1, nx=1,
         objective_builder=make_builders(dyn=dyn, L=L, Phi=None, quad='rk4'),
         control_bounds_builder=lambda p: [(-5.0, 5.0)] * (p.N * p.nu),
@@ -185,7 +185,7 @@ def test_reported_residuals_are_in_user_units():
     EX = importlib.reload(importlib.import_module("admiser.examples.my_port_kobe"))
     p = EX.problem
     # Single mode on purpose. Under continuation the last round uses the registered
-    # (final) eps while to_nlp() tapes with the FIRST round's eps, so the two would
+    # (final) eps while to_nlp() uses the FIRST round's eps, so the two would
     # be evaluating genuinely different constraints -- a difference of 100x here,
     # since gamma = T*eps/4 -- and the comparison would say nothing about units.
     p.set_transcription(mode="single")

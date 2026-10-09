@@ -16,12 +16,11 @@ Run just this file with:
 """
 
 import numpy as np
+import jax.numpy as jnp
 import pytest
-from functools import partial
 
-from admiser import (OCPProblem, OCPSolver, QUAD_SCHEMES, make_builders,
-                     rk4_substeps)
-from admiser.quadrature import _quad_samples
+from admiser import OCPProblem, OCPSolver, QUAD_SCHEMES, make_builders
+from admiser.quadrature import _quad_samples, rk4_substeps
 
 # ---------------------------------------------------------------------------
 # Reference problem with a closed-form answer
@@ -49,7 +48,7 @@ ORDER_TOLERANCE = 0.25
 
 def _dyn(x, u, theta=None):
     """x' = x"""
-    return np.array([x[0]], dtype=object)
+    return jnp.array([x[0]])
 
 
 def _integrand(t, x, u, theta):
@@ -62,7 +61,7 @@ def _integral_with(scheme, m_sub):
     Compute int_0^1 t^2 e^t dt with the given scheme and substep count.
 
     The integral is obtained by making it this problem's objective: the objective
-    is exactly int L dt, so the value the tape reports IS the quadrature result.
+    is exactly int L dt, so the value the NLP reports IS the quadrature result.
     """
     objective_builder = make_builders(dyn=_dyn, L=_integrand, Phi=None, quad=scheme)
     problem = OCPProblem(
@@ -70,13 +69,13 @@ def _integral_with(scheme, m_sub):
         x0=np.array([1.0]),
         u0=0.0,
         dyn=_dyn,
-        integrator=partial(rk4_substeps, m_sub=m_sub),
+        m_sub=m_sub,
         nu=1, nx=1,
         objective_builder=objective_builder,
         control_bounds_builder=lambda p: [(-1.0, 1.0)] * (p.N * p.nu),
         ntheta=0,
     )
-    # to_nlp() records the tape without optimising; the control does not enter
+    # to_nlp() builds the NLP without optimising; the control does not enter
     # this integral at all, so no solve is needed.
     nlp = OCPSolver(problem).to_nlp()
     return nlp.objective_fun(problem.initial_guess())
@@ -147,7 +146,8 @@ def test_sample_weights_sum_to_the_substep_length(scheme):
 @pytest.mark.parametrize("scheme", list(QUAD_SCHEMES))
 def test_number_of_integrand_evaluations_is_as_declared(scheme):
     """
-    n_eval is what users budget their AD tape size against, so it must be honest.
+    n_eval is what users budget the cost of every evaluation against, so it must
+    be honest.
     """
     h = 0.37
     x = np.array([1.0])

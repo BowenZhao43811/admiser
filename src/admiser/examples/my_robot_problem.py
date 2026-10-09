@@ -1,10 +1,9 @@
 # my_robot_problem.py -- canonical-constraint version
 
 import numpy as np
-from functools import partial
+import jax.numpy as jnp
 
 from admiser import OCPProblem
-from admiser import rk4_substeps
 from admiser import make_builders   # builds the objective only
 
 # ---------------- basic setup ----------------
@@ -21,13 +20,13 @@ nu, nx = 2, 6
 u0 = [1.0, 1.0]
 
 # System parameter, a fixed constant here. To optimise it instead, read it from
-# atheta[0] in dyn (see the commented block further down).
+# theta[0] in dyn (see the commented block further down).
 alpha = 0.2
 
 # ---------------- dynamics ----------------
 # x = [x1, x2, x3, x4, x5, x6], u = [u1, u2]
-def dyn(x, u, atheta=None):
-    # For the parameter-optimisation variant, replace this with: a = atheta[0]
+def dyn(x, u, theta=None):
+    # For the parameter-optimisation variant, replace this with: a = theta[0]
     a = alpha
 
     x1, x2, x3, x4, x5, x6 = x
@@ -36,14 +35,14 @@ def dyn(x, u, atheta=None):
     dx1 = x4
     dx2 = x5
     dx3 = x6
-    dx4 = s * np.cos(x3)
-    dx5 = s * np.sin(x3)
+    dx4 = s * jnp.cos(x3)
+    dx5 = s * jnp.sin(x3)
     dx6 = a * (u1 - u2)
-    return np.array([dx1, dx2, dx3, dx4, dx5, dx6], dtype=object)
+    return jnp.array([dx1, dx2, dx3, dx4, dx5, dx6])
 
 # ---------------- objective L(t, x, u) ----------------
 # J = int (u1^2 + u2^2) dt
-def L(t, x, u, atheta):
+def L(t, x, u, theta):
     return u[0]*u[0] + u[1]*u[1]
 
 # Only the objective builder is needed; constraints go through the add_* API.
@@ -69,14 +68,12 @@ def control_bounds_builder(problem: OCPProblem):
 # theta0 = np.array([0.25])
 
 # ---------------- assemble the problem ----------------
-substepped_rk4 = partial(rk4_substeps, m_sub=10)
-
 problem = OCPProblem(
     N=N, dt=dt,
-    x0=x0,                 # fixed x0; if it depends on theta use x0_from_theta_ad/_numeric
+    x0=x0,                 # fixed x0; if it depends on theta use x0_from_theta
     u0 = u0,
     dyn=dyn,
-    integrator=substepped_rk4,
+    m_sub=10,              # RK4 substeps per segment
     nu=nu, nx=nx,
     objective_builder=objective_builder,
     control_bounds_builder=control_bounds_builder,
@@ -87,9 +84,8 @@ problem = OCPProblem(
 problem.quad_scheme = 'rk4'
 
 # ---- terminal equality x(T) - xT = 0, registered through the canonical API ----
-def terminal_eq_psi(xT_ad, atheta):
-    xT_const = np.array([v for v in xT], dtype=object)
-    return xT_ad - xT_const   # vector equality = 0
+def terminal_eq_psi(xT_ad, theta):
+    return xT_ad - xT   # vector equality = 0
 
 problem.add_terminal_eq(terminal_eq_psi)
 

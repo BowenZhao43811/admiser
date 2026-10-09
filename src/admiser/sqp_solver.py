@@ -1,27 +1,11 @@
 # sqp_solver.py
 
-import inspect
-
 import numpy as np
 from scipy.optimize import minimize
 
-from .ad_tape import build_ad_tape
+from .ocp_to_nlp import build_nlp
 from .nlp_functions import NLPFunctions
 from .problem_scaling import compute_scaling
-
-
-def _bind_dyn_numeric(dyn, theta):
-    """
-    Wrap dyn into f(x, u) for the numeric path. It must detect 2-argument versus
-    3-argument signatures by exactly the same rule as _bind_dyn_with_theta_ad on
-    the AD side; otherwise a problem whose dyn only takes (x, u) would raise a
-    TypeError only after the whole optimisation has finished, while replaying the
-    trajectory.
-    """
-    n_params = len(inspect.signature(dyn).parameters)
-    if n_params == 2:
-        return lambda x, u: np.asarray(dyn(x, u), dtype=float)
-    return lambda x, u: np.asarray(dyn(x, u, theta), dtype=float)
 
 
 class OCPSolver:
@@ -32,9 +16,9 @@ class OCPSolver:
     solve(...)   Solve. Whether that is a single solve or an eps -> 0 continuation
                  is decided by the problem itself, declared with
                  OCPProblem.set_transcription(); the solving side never branches on it.
-    to_nlp(...)  Only transcribe the OCP into an NLP (record the AD tape) and return
-                 an object that evaluates it and its derivatives -- NO optimisation.
-                 Useful for checking gradients, e.g. against finite differences.
+    to_nlp(...)  Only transcribe the OCP into an NLP and return an object that
+                 evaluates it and its derivatives -- NO optimisation. Useful for
+                 checking gradients, e.g. against finite differences.
 
     ------------- result dictionary -------------
     scipy_result : the SciPy result of the final round
@@ -58,16 +42,16 @@ class OCPSolver:
                    Length 1 in "single" mode, so callers never need to branch on the mode.
 
     ------------- notes -------------
-    - solve() never mutates the problem: eps is only scaled temporarily during a
-      round and restored afterwards, so the same problem can be solved repeatedly
+    - solve() never mutates the problem: each round's eps and gamma are handed to
+      the compiled NLP as arguments, so the same problem can be solved repeatedly
       with identical results.
     """
 
     def __init__(self, problem: object):
         self.problem = problem
-        self.taped = None      # the TapedNLP recorded by _build_tape()
-        self.opt_fun = None    # SciPy-facing view of that tape
-        # Scaling factors, computed once on the first tape and then FROZEN. They
+        self.compiled = None   # the CompiledNLP built by _compile()
+        self.opt_fun = None    # SciPy-facing view of it, for the current round
+        # Scaling factors, computed once in the first round and then FROZEN. They
         # must not be re-estimated per continuation round: each round would then
         # optimise a differently scaled problem, the warm start would lose its
         # meaning, and the per-round objectives would not be comparable.
@@ -93,29 +77,27 @@ class OCPSolver:
         z0      : starting point for the first round; defaults to problem.initial_guess()
         """
         p = self.problem
-        factors = p.eps_factors()
+        schedule = p.transcription_rounds()      # one (eps, gamma) pair per round
         if verbose is None:
-            verbose = len(factors) > 1
+            verbose = len(schedule) > 1
 
         z = p.initial_guess() if z0 is None else np.asarray(z0, dtype=float)
         rounds, res = [], None
-        announced = False
 
-        for k, factor in enumerate(factors):
-            # eps is scaled only inside this with-block and restored on exit, so
-            # spec["eps"] always keeps the value the user registered.
-            with p.scaled_eps(factor=factor):
-                self._build_tape()
-                # Say once, up front, that the numbers were rescaled and by how
-                # much. An automatic transform that changes the iteration history
-                # must never be invisible.
-                if verbose and not announced:
-                    print(self.scaling.describe())
-                    announced = True
-                res = self._solve_once(z, maxiter=maxiter, ftol=ftol, disp=disp)
-                z = res["scipy_result"].x
-                eps_now = [p.effective_eps(s) for s in p.path_ineq_specs]
-                gam_now = [p.effective_gamma(s) for s in p.path_ineq_specs]
+        # Compiled once; every round below reuses it, because a round differs
+        # from the previous one only in the VALUES of eps and gamma.
+        self._compile()
+
+        for k, (eps, gamma) in enumerate(schedule):
+            self.opt_fun = self._nlp_view(eps, gamma, scaled=True)
+            # Say once, up front, that the numbers were rescaled and by how much.
+            # An automatic transform that changes the iteration history must never
+            # be invisible.
+            if verbose and k == 0:
+                print(self.scaling.describe())
+            res = self._solve_once(z, maxiter=maxiter, ftol=ftol, disp=disp)
+            z = res["scipy_result"].x
+            eps_now, gam_now = eps.tolist(), gamma.tolist()
 
             viol = res["path_viol"]
             max_viol = float(np.max(viol)) if viol is not None and viol.size else float("nan")
@@ -125,10 +107,8 @@ class OCPSolver:
                                nit=res["scipy_result"].nit))
             if verbose:
                 e = f"{min(eps_now):.3e}" if eps_now else "-"
-                # max_viol is nan when the diagnostic could not be evaluated (a
-                # hfun that only accepts AD types); say so rather than print nan.
                 v = "n/a" if not np.isfinite(max_viol) else f"{max_viol:+.3e}"
-                print(f"[ADMISER] round {k+1}/{len(factors)}  eps={e}  "
+                print(f"[ADMISER] round {k+1}/{len(schedule)}  eps={e}  "
                       f"J={res['J_opt']:+.8g}  max h(t)={v}  "
                       f"status={res['scipy_result'].status}  nit={res['scipy_result'].nit}")
 
@@ -147,52 +127,54 @@ class OCPSolver:
             nlp = OCPSolver(problem).to_nlp()
             g_ad = nlp.objective_grad(z)
 
-        eps : which eps to tape with. None (default) uses the eps the FIRST
-              continuation round would actually use (in "single" mode that is the
-              registered value itself). Passing a number applies it to every path
-              constraint.
+        eps : which eps to use. None (default) uses the eps the FIRST continuation
+              round would actually use (in "single" mode that is the registered
+              value itself). Passing a number applies it to every path constraint.
         """
         p = self.problem
-        factor = p.eps_factors()[0]
-        with p.scaled_eps(factor=factor, override=eps):
-            # Deliberately unscaled: this is meant to be the user's own problem,
-            # so a gradient checked against finite differences here is a gradient
-            # of what the user wrote, not of an internally rescaled version.
-            self._build_tape(scaled=False)
+        self._compile()
+        eps_arr, gamma_arr = p.eps_gamma(factor=p.eps_factors()[0], eps=eps)
+        # Deliberately unscaled: this is meant to be the user's own problem, so a
+        # gradient checked against finite differences here is a gradient of what
+        # the user wrote, not of an internally rescaled version.
+        self.opt_fun = self._nlp_view(eps_arr, gamma_arr, scaled=False)
         return self.opt_fun
 
     # ================= internals =================
 
-    def _build_tape(self, scaled=True):
+    def _compile(self):
         """
-        Record the AD tape. eps is baked into it as a constant, which is why every
-        continuation round has to re-record.
-
-        The tape itself is always in the user's units. When `scaled` is set, the
-        SciPy-facing view multiplies by the frozen scaling factors on the way out;
-        those factors are estimated once, from an UNSCALED view of the first tape,
-        so they describe the problem as the user wrote it.
+        Transcribe the problem into its NLP functions (see ocp_to_nlp). JAX
+        compiles them on their first call; every later call -- every SLSQP
+        iteration, every continuation round -- reuses that compilation.
         """
-        z0 = self.problem.initial_guess()
-        self.taped = build_ad_tape(z0, self.problem)
+        self.compiled = build_nlp(self.problem)
+        return self.compiled
 
+    def _nlp_view(self, eps, gamma, scaled=True):
+        """
+        The SciPy-facing view of the compiled NLP for one round's eps and gamma.
+
+        The compiled functions always work in the user's units. When `scaled` is
+        set, the view multiplies by the scaling factors on the way out; those are
+        estimated once, from an UNSCALED view of the first round, so they describe
+        the problem as the user wrote it, and then stay frozen.
+        """
         if not scaled:
-            self.opt_fun = NLPFunctions(self.taped)
-            return self.opt_fun
+            return NLPFunctions(self.compiled, eps, gamma)
 
         if self.scaling is None:
             cfg = getattr(self.problem, "scaling", None) or {}
-            unscaled = NLPFunctions(self.taped)
+            unscaled = NLPFunctions(self.compiled, eps, gamma)
             self.scaling = compute_scaling(
-                unscaled, z0, self.problem.make_bounds(),
+                unscaled, self.problem.initial_guess(), self.problem.make_bounds(),
                 objective=cfg.get("objective", "auto"),
                 constraints=cfg.get("constraints", "auto"),
             )
-        self.opt_fun = NLPFunctions(self.taped, self.scaling)
-        return self.opt_fun
+        return NLPFunctions(self.compiled, eps, gamma, self.scaling)
 
     def _solve_once(self, z0, maxiter, ftol, disp):
-        """Solve the NLP once using the tapes currently recorded."""
+        """Solve the NLP once, with the current round's view of it."""
         bounds = self.problem.make_bounds()
 
         constraints = []
@@ -218,7 +200,10 @@ class OCPSolver:
         J_opt = sc.objective_to_user(self.opt_fun.objective_fun(res.x))
         eq_resid   = sc.eq_to_user(self.opt_fun.eq_fun(res.x)) if self.opt_fun.has_eq else None
         ineq_resid = sc.ineq_to_user(self.opt_fun.ineq_fun(res.x)) if self.opt_fun.has_ineq else None
-        t_opt, X_opt = self._numeric_rollout(U_opt, theta_opt, tau_opt)
+        # The reported trajectory comes from the very rollout that was optimised,
+        # replayed at the solution -- there is no second simulation that could
+        # disagree with it.
+        t_opt, X_opt = (np.array(a, dtype=float) for a in self.compiled.trajectory(res.x))
 
         return dict(
             scipy_result=res, U_opt=U_opt, theta_opt=theta_opt, J_opt=J_opt,
@@ -248,47 +233,7 @@ class OCPSolver:
                 kk = min(k, p.N - 1)
                 uk = (np.asarray(U[nu*kk: nu*(kk+1)], dtype=float) if nu > 0
                       else np.empty(0, dtype=float))
-                try:
-                    hv = np.atleast_1d(np.asarray(spec["hfun"](t[k], X[k], uk, theta), dtype=float))
-                except Exception:
-                    # The user's hfun only supports AD types; skip the diagnostic quietly.
-                    return None
+                hv = np.atleast_1d(np.asarray(spec["hfun"](t[k], X[k], uk, theta), dtype=float))
                 worst = max(worst, float(np.max(hv)))
             out.append(worst)
         return np.asarray(out, dtype=float)
-
-    def _numeric_rollout(self, U, theta, tau=None):
-        """
-        Replay the optimal trajectory with the problem's dyn/integrator, for plotting.
-
-        Under the time-scaling transform each segment has its own duration, so the
-        time grid is the cumulative sum of tau rather than a uniform linspace.
-        """
-        p = self.problem
-        N, nx, nu = p.N, p.nx, p.nu
-        durations = p.segment_durations(tau)
-
-        # Use the problem's hook to build the numeric initial state from theta;
-        # fall back to the fixed x0 when there is none.
-        if hasattr(p, "numeric_initial_state") and callable(p.numeric_initial_state):
-            x = np.asarray(p.numeric_initial_state(theta), dtype=float)
-        else:
-            x = np.asarray(p.x0, dtype=float)
-
-        X = np.zeros((N+1, nx), dtype=float)
-        X[0] = x
-        t = np.concatenate(([0.0], np.cumsum(durations)))
-
-        step = p.integrator
-        f_num = _bind_dyn_numeric(p.dyn, theta)
-
-        for k in range(N):
-            if nu == 1:
-                uk = np.array([U[k]], dtype=float)
-            else:
-                uk = np.asarray(U[nu*k:nu*(k+1)], dtype=float)
-            # substeps are handled inside the integrator
-            x = step(x, uk, durations[k], f_num)
-            X[k+1] = x
-
-        return t, X

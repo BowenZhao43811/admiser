@@ -1,10 +1,9 @@
 # my_medical2.py -- COVID-19 SEIR optimal control
 # u1 = vaccination rate, u2 = contact-reduction intensity
 import numpy as np
-from functools import partial
+import jax.numpy as jnp
 
 from admiser import OCPProblem
-from admiser import rk4_substeps
 from admiser import make_builders
 
 # ===== time grid =====
@@ -37,7 +36,7 @@ def dyn(x, u, theta=None):
     dE =   beta_eff * S * I - sigma * E
     dI =   sigma * E - gamma * I
     dR =   gamma * I + u1 * S
-    return np.array([dS, dE, dI, dR], dtype=object)
+    return jnp.array([dS, dE, dI, dR])
 
 # ===== objective: int (wI*I + wE*E + a1*u1^2 + a2*u2^2) dt =====
 wI, wE = 50.0, 5.0
@@ -65,13 +64,12 @@ def control_bounds_builder(problem: OCPProblem):
     return b
 
 # ===== assemble the problem (multi-substep RK4) =====
-substepped_rk4 = partial(rk4_substeps, m_sub=10)
 problem = OCPProblem(
     N=N, dt=dt,
     x0=x0,
     u0=0.0,                      # start from zero control
     dyn=dyn,
-    integrator=substepped_rk4,
+    m_sub=10,                    # RK4 substeps per segment
     nu=nu, nx=nx,
     objective_builder=objective_builder,
     control_bounds_builder=control_bounds_builder,
@@ -83,9 +81,6 @@ problem.quad_scheme = 'rk4'
 # 1) path inequality: I(t) <= I_cap, i.e. h = I - I_cap <= 0 -> int L_eps(h) dt <= gamma
 I_cap = 0.02
 def h_peak_I(t, x, u, theta):
-    # Plain arithmetic, no explicit a_double: this function is also evaluated on
-    # the float trajectory to report the true violation (result["path_viol"]),
-    # and wrapping the constant in an a_double would break that path.
     return x[2] - I_cap   # x[2] = I
 problem.add_path_ineq(h_peak_I, eps=1e-2, gamma=0.25e-2)
 

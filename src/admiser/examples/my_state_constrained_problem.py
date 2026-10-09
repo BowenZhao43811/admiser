@@ -1,9 +1,8 @@
 # my_state_constrained_problem.py -- a pure state path constraint
 import numpy as np
-from functools import partial
+import jax.numpy as jnp
 
 from admiser import OCPProblem
-from admiser import rk4_substeps
 from admiser import make_builders
 
 T = 1.0
@@ -20,7 +19,7 @@ def dyn(x, u, theta=None):
     uu = u[0]
     dx1 = x2
     dx2 = -x2 + uu
-    return np.array([dx1, dx2], dtype=object)
+    return jnp.array([dx1, dx2])
 
 def L(t, x, u, theta):
     return (x[0]*x[0]) + (x[1]*x[1]) + 0.005*(u[0]*u[0])
@@ -30,12 +29,11 @@ objective_builder= make_builders(dyn=dyn, L=L, Phi=None, quad='rk4')
 def control_bounds_builder(problem: OCPProblem):
     return [(-20.0, 20.0)] * (problem.N * problem.nu)
 
-substep_rk4 = partial(rk4_substeps, m_sub=10)
 problem = OCPProblem(
     N=N, dt=dt,
     x0=x0,
     u0 = u0,
-    dyn=dyn, integrator=substep_rk4,
+    dyn=dyn, m_sub=10,    # RK4 substeps per segment
     nu=nu, nx=nx,
     objective_builder=objective_builder,
     control_bounds_builder=control_bounds_builder,

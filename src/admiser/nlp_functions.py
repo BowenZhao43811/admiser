@@ -7,28 +7,35 @@ from .problem_scaling import identity_scaling
 
 class NLPFunctions:
     """
-    Present the taped NLP through the interface SciPy's minimize/SLSQP expects.
+    Present the transcribed NLP through the interface SciPy's minimize/SLSQP expects.
 
-    The tape produced by build_ad_tape holds all outputs stacked as
-    [J ; G ; C], so a single forward sweep yields the objective AND every
-    constraint, and a single Jacobian yields every derivative. This class slices
-    that one result into the six callbacks SciPy asks for.
+    The compiled function built by ocp_to_nlp returns all outputs stacked as
+    [J ; G ; C], so one evaluation yields the objective AND every constraint, and
+    one Jacobian yields every derivative. This class slices that one result into
+    the six callbacks SciPy asks for.
+
+    One round of the transcription
+    ------------------------------
+    eps and gamma -- one value per path inequality -- are fixed for the lifetime of
+    this object and handed to the compiled function on every call. A continuation
+    solve simply creates a new NLPFunctions per round; the compiled function, and
+    its compilation, are shared by all of them.
 
     Scaling
     -------
-    The tape always holds the problem in the USER's units. Any rescaling is applied
-    here, on the way out to SciPy, and nowhere else; the solver converts the
-    numbers it reports back with ProblemScaling.*_to_user. Keeping the tape
-    unscaled is what lets to_nlp() hand back the user's own problem and lets the
-    scaling change without re-recording anything.
+    The compiled function always computes the problem in the USER's units. Any
+    rescaling is applied here, on the way out to SciPy, and nowhere else; the
+    solver converts the numbers it reports back with ProblemScaling.*_to_user.
+    Keeping the compiled function unscaled is what lets to_nlp() hand back the
+    user's own problem and lets the scaling change without recompiling anything.
 
     Caching
     -------
     SLSQP evaluates the objective, its gradient, the constraints and their
     Jacobians all at the SAME z before it moves on. Without caching each of those
-    six calls would replay the tape from scratch. So the last forward sweep and
-    the last Jacobian are remembered, keyed on z: the first call at a new point
-    does the work, the other five read the stored result.
+    six calls would run the whole simulation again. So the last values and the
+    last Jacobian are remembered, keyed on z: the first call at a new point does
+    the work, the others read the stored result.
 
     Exposes
     -------
@@ -40,21 +47,24 @@ class NLPFunctions:
     ineq_jac(z)       -> dC/dz, shape (n_ineq, n)
     """
 
-    def __init__(self, taped, scaling=None):
-        self.taped = taped
-        self.fun = taped.fun
+    def __init__(self, compiled, eps, gamma, scaling=None):
+        self.compiled = compiled
 
-        self.n_eq = taped.n_eq
-        self.n_ineq = taped.n_ineq
+        # This round's transcription parameters, one value per path inequality.
+        self.eps = np.asarray(eps, dtype=float)
+        self.gamma = np.asarray(gamma, dtype=float)
 
-        # None means "present the problem exactly as taped".
+        self.n_eq = compiled.n_eq
+        self.n_ineq = compiled.n_ineq
+
+        # None means "present the problem exactly as the user wrote it".
         self.scaling = scaling if scaling is not None else identity_scaling(
-            taped.n_eq, taped.n_ineq)
+            compiled.n_eq, compiled.n_ineq)
 
         # Row ranges of the three blocks inside the stacked output vector.
-        self._obj = taped.obj_slice
-        self._eq = taped.eq_slice
-        self._ineq = taped.ineq_slice
+        self._obj = compiled.obj_slice
+        self._eq = compiled.eq_slice
+        self._ineq = compiled.ineq_slice
 
         # Cache state: the point each cached result belongs to, and the results.
         self._z_values = None
@@ -62,7 +72,7 @@ class NLPFunctions:
         self._z_jacobian = None
         self._jacobian = None
 
-    # ---- convenience flags, so callers do not have to inspect the tape ----
+    # ---- convenience flags, so callers do not have to inspect the layout ----
     @property
     def has_eq(self) -> bool:
         return self.n_eq > 0
@@ -71,12 +81,14 @@ class NLPFunctions:
     def has_ineq(self) -> bool:
         return self.n_ineq > 0
 
-    # ---- cached tape evaluation ----
+    # ---- cached evaluation ----
+    # The compiled functions return JAX arrays; np.array(...) copies them into
+    # ordinary NumPy arrays, which is what SciPy works with.
     def _all_values(self, z):
-        """[J ; G ; C] at z, reusing the previous sweep when z has not moved."""
+        """[J ; G ; C] at z, reusing the previous evaluation when z has not moved."""
         z = np.asarray(z, dtype=float)
         if self._z_values is None or not np.array_equal(z, self._z_values):
-            self._values = self.fun.forward(0, z)
+            self._values = np.array(self.compiled.values(z, self.eps, self.gamma), dtype=float)
             self._z_values = z.copy()
         return self._values
 
@@ -84,7 +96,8 @@ class NLPFunctions:
         """d[J ; G ; C]/dz at z, reusing the previous one when z has not moved."""
         z = np.asarray(z, dtype=float)
         if self._z_jacobian is None or not np.array_equal(z, self._z_jacobian):
-            self._jacobian = self.fun.jacobian(z)
+            _, jacobian = self.compiled.values_and_jacobian(z, self.eps, self.gamma)
+            self._jacobian = np.array(jacobian, dtype=float)
             self._z_jacobian = z.copy()
         return self._jacobian
 

@@ -20,7 +20,7 @@ keywords = [
   "automatic differentiation",
   "trajectory optimization",
   "nonlinear programming",
-  "CppAD",
+  "JAX",
 ]
 classifiers = [
   "Development Status :: 3 - Alpha",
@@ -35,7 +35,10 @@ classifiers = [
 dependencies = [
   "numpy",
   "scipy",
-  "matplotlib"
+  "matplotlib",
+  # Automatic differentiation. Plain `pip install` brings it on Windows, Linux
+  # and macOS; no compiler is needed.
+  "jax>=0.6",
 ]
 
 [project.urls]
@@ -46,9 +49,6 @@ Issues = "https://github.com/BowenZhao43811/admiser/issues"
 [project.optional-dependencies]
 # Everything needed to run the test suite. Install with:  pip install -e ".[dev]"
 dev = ["pytest>=7"]
-
-[project.scripts]
-admiser-install-cppad = "admiser_cppad_installer.install_cppad_cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -62,7 +62,6 @@ where = ["src"]
 # include examples result
 [tool.setuptools.package-data]
 "admiser.examples" = ["notebooks/*.ipynb"]
-"admiser_cppad_installer" = ["build_cppad.sh"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

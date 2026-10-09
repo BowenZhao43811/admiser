@@ -42,8 +42,8 @@ Design constraint: no extra dynamics evaluations
 ------------------------------------------------
 Every scheme below reuses only the k1..k4 already computed by RK4 and the
 intermediate states formed from them; none of them evaluate f again. The only
-cost is the number of evaluations of the integrand g (n_eval), which drives the
-size of the AD tape. So a higher order costs a bigger tape, not a second ODE solve.
+cost is the number of evaluations of the integrand g (n_eval) per substep. So a
+higher order costs a few more integrand evaluations, not a second ODE solve.
 
 The scheme family (orders are measured, on x' = x, g = t^2*x,
 int_0^1 t^2 e^t dt = e - 2)
@@ -83,7 +83,7 @@ import numpy as np
 class QuadScheme(NamedTuple):
     """
     Metadata for one quadrature scheme. `order` is the measured global order of
-    convergence; `n_eval` drives the size of the AD tape.
+    convergence; `n_eval` is how many times the integrand is evaluated per substep.
     """
     order: int      # global order of convergence
     n_eval: int     # integrand evaluations per substep
@@ -176,7 +176,7 @@ def rk4_step(x, u, h, dyn):
 
         x_{k+1} = x_k + h/6 * (k1 + 2*k2 + 2*k3 + k4)
 
-    x, u : float / numpy.array / arrays holding cppad_py.a_double
+    x, u : NumPy or JAX arrays
     dyn  : the user's dynamics, dyn(x, u) -> xdot
     """
     k1 = dyn(x, u)
@@ -186,19 +186,56 @@ def rk4_step(x, u, h, dyn):
     return x + (h / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
 
 
+def rk4_substep(x, u, h, f, t=None, quad='rk4'):
+    """
+    One classical RK4 substep over [t, t+h], together with the quadrature sample
+    points of the chosen scheme on that substep.
+
+    This is the unit the solver repeats: ocp_to_nlp runs it once per substep,
+    inside a single jax.lax.scan over the whole horizon. rk4_substeps below chains
+    several of them for standalone use.
+
+    Parameters
+    ----------
+    x, u : state at the start of the substep, and the control held on it
+    h    : substep length
+    f    : f(x, u) -> dx/dt
+    t    : start time of the substep, or None if no integrand depends on t
+    quad : quadrature scheme name, see QUAD_SCHEMES (the caller validates it)
+
+    Returns
+    -------
+    x_end   : the state at t + h
+    samples : tuple of (t_i, x_i, w_i). Summing w_i * g(t_i, x_i, u) over them
+              approximates the integral of g over this substep; the weights w_i
+              add up to h.
+    """
+    k1 = f(x, u)
+    k2 = f(x + 0.5 * h * k1, u)
+    k3 = f(x + 0.5 * h * k2, u)
+    k4 = f(x + h * k3,       u)
+
+    x_end = x + (h / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
+    return x_end, _quad_samples(quad, t, h, x, k1, k2, k3, x_end)
+
+
 def rk4_substeps(x, u, dt, f, m_sub=5, accumulate_cb=None, t0=None, quad='rk4'):
     """
-    Multi-substep RK4 integrator, optionally calling back within each substep
-    according to the chosen quadrature scheme, so that integrals along the
+    Advance the state over one control segment with m_sub RK4 substeps, optionally
+    calling back at the quadrature sample points so that integrals along the
     trajectory can be accumulated.
+
+    The solver itself does not call this function -- it repeats rk4_substep inside
+    one jax.lax.scan, see ocp_to_nlp. rk4_substeps is the convenient form for
+    simulating a trajectory by hand, and what the quadrature tests exercise.
 
     Parameters
     ----------
     x : ndarray (nx,)
-        State at the start of the segment; elements may be float or cppad_py.a_double.
+        State at the start of the segment.
     u : ndarray (nu,)
         The (piecewise-constant) control on this segment.
-    dt : float | a_double
+    dt : float
         Total duration of this segment.
     f : callable
         f(x, u) -> dx/dt
@@ -206,11 +243,10 @@ def rk4_substeps(x, u, dt, f, m_sub=5, accumulate_cb=None, t0=None, quad='rk4'):
         Number of substeps; the segment is split evenly into m_sub steps of h = dt/m_sub.
     accumulate_cb : callable | None
         accumulate_cb(t_i, x_i, u, w_i); the caller accumulates w_i * integrand.
-        When None, quadrature is skipped entirely (pure state propagation, e.g.
-        the numeric rollout after solving).
+        When None, quadrature is skipped entirely (pure state propagation).
         Note the fourth argument is a QUADRATURE WEIGHT, not the substep length:
         a substep may fire the callback several times, and the weights sum to h.
-    t0 : float | a_double | None
+    t0 : float | None
         Start time of this segment. When None, the callback receives t_i = None,
         which is fine if the integrand does not depend on t.
     quad : str
@@ -233,15 +269,10 @@ def rk4_substeps(x, u, dt, f, m_sub=5, accumulate_cb=None, t0=None, quad='rk4'):
     t = t0
 
     for _ in range(m_sub):
-        k1 = f(x, u)
-        k2 = f(x + 0.5 * h * k1, u)
-        k3 = f(x + 0.5 * h * k2, u)
-        k4 = f(x + h * k3,       u)
-
-        x_end = x + (h / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
+        x_end, samples = rk4_substep(x, u, h, f, t=t, quad=scheme)
 
         if accumulate_cb is not None:
-            for t_i, x_i, w_i in _quad_samples(scheme, t, h, x, k1, k2, k3, x_end):
+            for t_i, x_i, w_i in samples:
                 accumulate_cb(t_i, x_i, u, w_i)
 
         x = x_end

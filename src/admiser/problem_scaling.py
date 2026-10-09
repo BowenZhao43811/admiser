@@ -37,10 +37,10 @@ The objective and the constraints are NOT scaled by the same formula:
 
 What is NOT scaled
 ------------------
-The AD tape always holds the user's problem in the user's own units. Scaling is
-applied only where the NLP is handed to SciPy, and undone on everything reported
-back. So `to_nlp()` returns the unscaled problem, changing the scaling never
-requires re-recording a tape, and every number in the result dictionary is in the
+The compiled NLP always computes the user's problem in the user's own units.
+Scaling is applied only where the NLP is handed to SciPy, and undone on everything
+reported back. So `to_nlp()` returns the unscaled problem, changing the scaling
+never requires recompiling, and every number in the result dictionary is in the
 units the user wrote.
 
 Determinism

@@ -2,11 +2,15 @@
 # General OCP problem template: the objective and the constraints are decoupled,
 # and all constraints are registered in canonical form.
 import numpy as np
-from functools import partial
+import jax.numpy as jnp
 
 from admiser import OCPProblem
-from admiser import rk4_substeps
 from admiser import make_builders   # builds the objective_builder only
+
+# Write every model function below with jax.numpy (jnp): jnp.array, jnp.exp,
+# jnp.sin, ... -- and jnp.where(condition, a, b) instead of an if/else that tests a
+# state, control or parameter value. The solver differentiates these functions with
+# JAX, which needs to see every operation they perform.
 
 # ============= 1) grid and dimensions =============
 T  = 1.0
@@ -33,7 +37,7 @@ def dyn(x, u, theta=None):
     u1 = u[0]
     dx1 = x2
     dx2 = -x1 + u1
-    return np.array([dx1, dx2], dtype=object)
+    return jnp.array([dx1, dx2])
 
 # ============= 4) objective pieces (L and Phi) =============
 def L(t, x, u, theta):
@@ -53,16 +57,11 @@ objective_builder = make_builders(
 )
 
 # ============= 5) optional: theta-dependent initial state x0 = x0(theta) =============
-def x0_from_theta_ad(atheta, problem):
-    """Example: x0 = [theta1, 0]. Omit both hooks if you do not optimise parameters."""
-    if atheta is None:
-        return np.array([0.0, 0.0], dtype=object)
-    return np.array([atheta[0], 0.0], dtype=object)
-
-def x0_from_theta_numeric(theta, problem):
-    if theta is None:
-        return x0.copy()
-    return np.array([float(theta[0]), 0.0], dtype=float)
+def x0_from_theta(theta, problem):
+    """Example: x0 = [theta1, 0]. Omit this hook if you do not optimise parameters."""
+    if theta is None:               # the problem has no system parameters
+        return jnp.asarray(x0)
+    return jnp.array([theta[0], 0.0])
 
 # ============= 6) control box bounds =============
 def control_bounds_builder(problem: OCPProblem):
@@ -78,22 +77,19 @@ def param_bounds_builder(problem: OCPProblem):
     return [(0.0, 1.0)]
 
 # ============= 8) assemble the problem =============
-substepped_rk4 = partial(rk4_substeps, m_sub=10)
-
 problem = OCPProblem(
     N=N, dt=dt,
     x0=x0,                         # overridden by the hooks below if x0 depends on theta
     u0=u0,
     dyn=dyn,
-    integrator=substepped_rk4,
+    m_sub=10,                      # RK4 substeps per segment
     nu=nu, nx=nx,
     objective_builder=objective_builder,
     control_bounds_builder=control_bounds_builder,
     ntheta=ntheta,
     theta0=theta0,
     param_bounds_builder=param_bounds_builder if ntheta > 0 else None,
-    x0_from_theta_ad=x0_from_theta_ad if ntheta > 0 else None,
-    x0_from_theta_numeric=x0_from_theta_numeric if ntheta > 0 else None,
+    x0_from_theta=x0_from_theta if ntheta > 0 else None,
 )
 problem.quad_scheme = 'rk4'
 
@@ -104,9 +100,8 @@ problem.quad_scheme = 'rk4'
 # Pick what your own problem needs -- do not switch them all on at once.
 
 # 9.1 terminal equality: x(T) = xT
-def terminal_eq_psi(xT_ad, atheta):
-    xT_const = np.array([v for v in [1.0, 0.0]], dtype=object)
-    return xT_ad - xT_const   # vector equality = 0
+def terminal_eq_psi(xT_ad, theta):
+    return xT_ad - jnp.array([1.0, 0.0])   # vector equality = 0
 problem.add_terminal_eq(terminal_eq_psi)
 
 # 9.2 integral equality: int q(t, x, u, theta) dt = target
@@ -115,8 +110,8 @@ problem.add_terminal_eq(terminal_eq_psi)
 
 # 9.3 path equality: h(t, x, u, theta) = 0
 # - mode 'L2' : int h^2 dt = 0 (recommended)
-# - mode 'abs': int smooth_abs_eps(h) dt = 0; eps_abs shrinks along with eps
-#               during a continuation solve
+# - mode 'abs': int smooth_abs_eps(h) dt = 0; eps_abs stays as given (it does
+#               not take part in the eps -> 0 continuation)
 # def h_eq(t, x, u, th): return x[1]
 # problem.add_path_eq(hfun=h_eq, mode="L2", eps_abs=1e-6)
 

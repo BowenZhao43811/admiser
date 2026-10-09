@@ -1,9 +1,8 @@
 # my_ex_882_zeta_param.py -- system parameters theta = [zeta1, zeta2] that also set x0
 import numpy as np
-from functools import partial
+import jax.numpy as jnp
 
 from admiser import OCPProblem
-from admiser import rk4_substeps
 from admiser import make_builders
 
 # ---- grid ----
@@ -21,16 +20,12 @@ gamma = 0.1
 u_max = 6.0
 
 # ---- x0(theta) = [(1-gamma) + gamma*z1, gamma*z2] ----
-def x0_from_theta_ad(atheta, problem):
-    z1, z2 = atheta[0], atheta[1]
-    return np.array([
+def x0_from_theta(theta, problem):
+    z1, z2 = theta[0], theta[1]
+    return jnp.array([
         1.0 - gamma + gamma * z1,
         gamma * z2
-    ], dtype=object)
-
-def x0_from_theta_numeric(theta, problem):
-    z1, z2 = float(theta[0]), float(theta[1])
-    return np.array([(1.0 - gamma) + gamma*z1, gamma*z2], dtype=float)
+    ])
 
 # ---- dynamics ----
 def dyn(x, u, _theta_unused):
@@ -38,7 +33,7 @@ def dyn(x, u, _theta_unused):
     uu = u[0]
     dx1 = -(uu + beta * (uu**p_pow)) * x1
     dx2 =  uu * x1
-    return np.array([dx1, dx2], dtype=object)
+    return jnp.array([dx1, dx2])
 
 # ---- objective: min -zeta2, expressed as a terminal cost Phi ----
 def Phi(xT_ad, atheta):
@@ -59,19 +54,17 @@ def param_bounds_builder(problem: OCPProblem):
     return [(0.0, 1.0), (0.0, 1.0)]
 
 # ---- assemble ----
-substep_rk4 = partial(rk4_substeps, m_sub=10)
 problem = OCPProblem(
     N=N, dt=dt,
     x0=np.zeros(nx),  # placeholder; the real initial state comes from theta
     u0 = u0,
     dyn=dyn,
-    integrator=substep_rk4,
+    m_sub=10,         # RK4 substeps per segment
     nu=nu, nx=nx,
     objective_builder=objective_builder,
     control_bounds_builder=control_bounds_builder,
     ntheta=ntheta, theta0=theta0, param_bounds_builder=param_bounds_builder,
-    x0_from_theta_ad=x0_from_theta_ad,
-    x0_from_theta_numeric=x0_from_theta_numeric,
+    x0_from_theta=x0_from_theta,
 )
 problem.quad_scheme = 'rk4'
 

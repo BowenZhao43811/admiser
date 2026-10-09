@@ -10,10 +10,9 @@
 # the decision variables, and the objective is simply the elapsed time.
 
 import numpy as np
-from functools import partial
+import jax.numpy as jnp
 
 from admiser import OCPProblem
-from admiser import rk4_substeps
 from admiser import make_builders
 
 # ===== grid =====
@@ -36,7 +35,7 @@ u0 = 1.0   # initial guess for the turn rate
 def dyn(x, u, theta=None):
     x1, x2, x3 = x
     u1 = u[0]
-    return np.array([u1, np.cos(x1), np.sin(x1)], dtype=object)
+    return jnp.array([u1, jnp.cos(x1), jnp.sin(x1)])
 
 # ===== objective: minimise the elapsed time =====
 # int 1 dt == sum(tau), so a constant integrand IS the horizon. No extra state,
@@ -55,7 +54,7 @@ problem = OCPProblem(
     N=N, dt=dt,
     x0=x0, u0=u0,
     dyn=dyn,
-    integrator=partial(rk4_substeps, m_sub=10),
+    m_sub=10,          # RK4 substeps per segment
     nu=nu, nx=nx,
     objective_builder=objective_builder,
     control_bounds_builder=control_bounds_builder,
@@ -71,10 +70,10 @@ problem.set_time_scaling(tau0=dt, tau_min=1e-4, tau_max=5.0)
 
 # ===== terminal equalities: x2(T) = 0, x3(T) = 0 =====
 def terminal_eq_psi(xT_ad, theta):
-    return np.array([
+    return jnp.array([
         xT_ad[1] - 0.0,   # x2(T) = 0
         xT_ad[2] - 0.0,   # x3(T) = 0
-    ], dtype=object)
+    ])
 
 problem.add_terminal_eq(terminal_eq_psi)
 

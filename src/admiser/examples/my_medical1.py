@@ -1,10 +1,9 @@
 # my_medical1.py -- multi-compartment tumour therapy, canonical-constraint version
 
 import numpy as np
-from functools import partial
+import jax.numpy as jnp
 
 from admiser import OCPProblem
-from admiser import rk4_substeps
 from admiser import make_builders  # builds the objective_builder only
 
 # ================= 1) grid and dimensions =================
@@ -64,34 +63,34 @@ def dyn(x, u, theta=None):
     # S1
     dS1 = (r1 * S1 * (1.0 - V / K1)
            - tau1 * S1 - tau2 * S1
-           - a1 * (1.0 - np.exp(-C1)) * S1
-           - b1 * (1.0 - np.exp(-C2)) * S1)
+           - a1 * (1.0 - jnp.exp(-C1)) * S1
+           - b1 * (1.0 - jnp.exp(-C2)) * S1)
 
     # S2
     dS2 = (r2 * S2 * (1.0 - V / K2)
            + tau1 * S1
-           - a2 * (1.0 - np.exp(-C2)) * S2
-           - tau23 * (1.0 - np.exp(-C2)) * S2
-           + tau32 * (1.0 - np.exp(-C1)) * S3)
+           - a2 * (1.0 - jnp.exp(-C2)) * S2
+           - tau23 * (1.0 - jnp.exp(-C2)) * S2
+           + tau32 * (1.0 - jnp.exp(-C1)) * S3)
 
     # S3
     dS3 = (r3 * S3 * (1.0 - V / K3)
            + tau2 * S1
-           - a3 * (1.0 - np.exp(-C1)) * S3
-           - tau32 * (1.0 - np.exp(-C1)) * S3
-           + tau23 * (1.0 - np.exp(-C2)) * S2)
+           - a3 * (1.0 - jnp.exp(-C1)) * S3
+           - tau32 * (1.0 - jnp.exp(-C1)) * S3
+           + tau23 * (1.0 - jnp.exp(-C2)) * S2)
 
     # N
     dN  = (r4 * N * (1.0 - N / K4)
            + gamma_V * V * (1.0 - V / T_star)
-           - aN * (1.0 - np.exp(-C1)) * N
-           - bN * (1.0 - np.exp(-C2)) * N)
+           - aN * (1.0 - jnp.exp(-C1)) * N
+           - bN * (1.0 - jnp.exp(-C2)) * N)
 
     # drug concentrations
     dC1 = u1 - lam1 * C1
     dC2 = v1 - lam2 * C2
 
-    return np.array([dS1, dS2, dS3, dN, dC1, dC2], dtype=object)
+    return jnp.array([dS1, dS2, dS3, dN, dC1, dC2])
 
 # ================= 4) objective =================
 def L(t, x, u, theta):
@@ -116,13 +115,11 @@ def control_bounds_builder(problem: OCPProblem):
     return b
 
 # ================= 6) assemble the problem =================
-substepped_rk4 = partial(rk4_substeps, m_sub=10)
-
 problem = OCPProblem(
     N=N, dt=dt,
     x0=x0,
     dyn=dyn,
-    integrator=substepped_rk4,
+    m_sub=10,              # RK4 substeps per segment
     nu=nu, nx=nx,
     objective_builder=objective_builder,
     control_bounds_builder=control_bounds_builder,

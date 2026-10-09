@@ -1,10 +1,9 @@
 # my_port_kobe.py -- six-state container-crane problem, canonical-constraint version
 
 import numpy as np
-from functools import partial
+import jax.numpy as jnp
 
 from admiser import OCPProblem
-from admiser import rk4_substeps
 from admiser import make_builders  # builds int L dt + Phi only
 
 # ========== grid ==========
@@ -38,7 +37,7 @@ def dyn(x, u, theta=None):
     dx5 = 9.0 * u2
     dx6 = -9.0 / x2 * (u1 + 27.0756 * x3 + 2.0 * x5 * x6)
 
-    return np.array([dx1, dx2, dx3, dx4, dx5, dx6], dtype=object)
+    return jnp.array([dx1, dx2, dx3, dx4, dx5, dx6])
 
 # ========== objective: 4.5 * int_0^1 [x3^2 + x6^2] dt ==========
 def L(t, x, u, theta):
@@ -62,12 +61,9 @@ def control_bounds_builder(problem: OCPProblem):
     return b
 
 # ========== assemble the problem ==========
-substepped_rk4 = partial(rk4_substeps, m_sub=12)  # more substeps for stability
-
 # ---- terminal equality x(T) - xT = 0, via the canonical API ----
 def terminal_eq_psi(xT_ad, atheta):
-    xT_const = np.array([v for v in xT], dtype=object)
-    return xT_ad - xT_const
+    return xT_ad - xT
 
 # ========== path inequalities (constraint transcription) ==========
 # h1 = x4 - 2.5 <= 0
@@ -91,7 +87,7 @@ PATH_INEQS = (h1, h2, h3, h4)
 problem = OCPProblem(
     N=N, dt=dt,
     x0=x0,
-    dyn=dyn, integrator=substepped_rk4,
+    dyn=dyn, m_sub=12,    # more substeps for stability
     nu=nu, nx=nx,
     objective_builder=objective_builder,
     control_bounds_builder=control_bounds_builder,

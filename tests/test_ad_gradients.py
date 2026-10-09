@@ -2,10 +2,11 @@
 Test 1: the AD derivatives must agree with finite differences.
 
 This is the central claim of the whole package. ADMISER replaces the continuous
-adjoint equations of Teo's control parametrization with an automatic-differentiation
-tape, and the optimiser then trusts whatever that tape reports. If a refactor ever
-breaks the tape, the solver will not crash -- it will happily converge to the wrong
-answer, guided by wrong derivatives, and print a perfectly plausible number.
+adjoint equations of Teo's control parametrization with automatic differentiation
+(JAX, reverse mode), and the optimiser then trusts whatever derivatives it reports.
+If a refactor ever breaks them, the solver will not crash -- it will happily
+converge to the wrong answer, guided by wrong derivatives, and print a perfectly
+plausible number.
 
 So we check the derivatives against a completely independent reference: central
 finite differences, which use nothing but function values.
@@ -37,7 +38,7 @@ GRADIENT_TOLERANCE = 1e-5
 @pytest.mark.parametrize("name", EXAMPLE_NAMES)
 def test_objective_gradient_matches_finite_difference(name, example_problems):
     """
-    dJ/dz from the AD tape must match central differences of J(z).
+    dJ/dz from automatic differentiation must match central differences of J(z).
 
     `@pytest.mark.parametrize` runs this function once per example and reports
     each as its own PASS/FAIL line, so a failure names the guilty example
@@ -45,10 +46,10 @@ def test_objective_gradient_matches_finite_difference(name, example_problems):
     """
     problem = example_problems[name]
 
-    # to_nlp() records the AD tape and returns the transcribed NLP WITHOUT
-    # running the optimiser -- exactly what we want, since we are testing
-    # derivatives, not convergence. For a problem configured for continuation it
-    # uses the eps of the first round.
+    # to_nlp() builds the transcribed NLP and returns it WITHOUT running the
+    # optimiser -- exactly what we want, since we are testing derivatives, not
+    # convergence. For a problem configured for continuation it uses the eps of
+    # the first round.
     nlp = OCPSolver(problem).to_nlp()
 
     z = perturbed_point(problem, seed=0)
@@ -108,8 +109,8 @@ def test_gradient_holds_at_several_points(seed, example_problems):
     more.
 
     Only one example is used here -- it has both equality and inequality
-    constraints and system parameters, so it exercises every branch of the tape
-    builder -- which keeps this extra confidence cheap.
+    constraints and system parameters, so it exercises every branch of the
+    transcription -- which keeps this extra confidence cheap.
     """
     problem = example_problems["my_euler_buckling_beam"]
     nlp = OCPSolver(problem).to_nlp()

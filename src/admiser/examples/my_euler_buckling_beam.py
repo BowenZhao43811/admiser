@@ -1,9 +1,8 @@
 # my_euler_buckling_beam.py -- Euler buckling beam with system parameters theta
 import numpy as np
-from functools import partial
+import jax.numpy as jnp
 
 from admiser import OCPProblem
-from admiser import rk4_substeps
 from admiser import make_builders
 
 # grid
@@ -25,7 +24,7 @@ def dyn(x, u, atheta):
     dx1 = x2
     dx2 = -(z1 * x1) / (x3 * x3)
     dx3 = uu
-    return np.array([dx1, dx2, dx3], dtype=object)
+    return jnp.array([dx1, dx2, dx3])
 
 # objective: min -z1, expressed as a terminal cost
 def Phi(xT_ad, atheta):
@@ -34,12 +33,10 @@ def Phi(xT_ad, atheta):
 objective_builder= make_builders(dyn=dyn, L=None, Phi=Phi, quad='rk4')
 
 # The initial state depends on theta: x1(0)=0, x2(0)=1, x3(0)=z2
-def x0_from_theta_ad(atheta, problem):
-    return np.array([0.0,
-                     1.0,
-                     atheta[1]], dtype=object)
-def x0_from_theta_numeric(theta, problem):
-    return np.array([0.0, 1.0, float(theta[1])], dtype=float)
+def x0_from_theta(theta, problem):
+    return jnp.array([0.0,
+                      1.0,
+                      theta[1]])
 
 # Optional control box bounds, to help numerical stability
 def control_bounds_builder(problem: OCPProblem):
@@ -51,17 +48,14 @@ theta0 = np.array([5.0, 0.6], dtype=float)
 def param_bounds_builder(problem: OCPProblem):
     return [(0.0, 50.0), (0.5, 5.0)]
 
-substep_rk4 = partial(rk4_substeps, m_sub=10)
-
 problem = OCPProblem(
     N=N, dt=dt,
-    x0=np.zeros(nx), dyn=dyn, integrator=substep_rk4,
+    x0=np.zeros(nx), dyn=dyn, m_sub=10,
     nu=nu, nx=nx, u0 = u0,
     objective_builder=objective_builder,
     control_bounds_builder=control_bounds_builder,
     ntheta=ntheta, theta0=theta0, param_bounds_builder=param_bounds_builder,
-    x0_from_theta_ad=x0_from_theta_ad,
-    x0_from_theta_numeric=x0_from_theta_numeric,
+    x0_from_theta=x0_from_theta,
 )
 problem.quad_scheme = 'rk4'
 

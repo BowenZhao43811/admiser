@@ -9,10 +9,9 @@
 # and the objective is the elapsed time.
 
 import numpy as np
-from functools import partial
+import jax.numpy as jnp
 
 from admiser import OCPProblem
-from admiser import rk4_substeps
 from admiser import make_builders
 
 # ===== grid =====
@@ -33,8 +32,8 @@ def dyn(x, u, theta=None):
     x1, x2 = x
     u1, u2 = u
     dx1 = ((1.0 - x1) * u1 + (2.0 - x1) * u2) / x2
-    dx2 = -0.02 * np.sqrt(x2) + u1 + u2
-    return np.array([dx1, dx2], dtype=object)
+    dx2 = -0.02 * jnp.sqrt(x2) + u1 + u2
+    return jnp.array([dx1, dx2])
 
 # ===== objective: minimise the elapsed time =====
 def L(t, x, u, theta):
@@ -56,7 +55,7 @@ problem = OCPProblem(
     N=N, dt=dt,
     x0=x0, u0=u0,
     dyn=dyn,
-    integrator=partial(rk4_substeps, m_sub=10),
+    m_sub=10,          # RK4 substeps per segment
     nu=nu, nx=nx,
     objective_builder=objective_builder,
     control_bounds_builder=control_bounds_builder,
@@ -71,10 +70,10 @@ problem.set_time_scaling(tau0=dt, tau_min=1e-3, tau_max=200.0)
 
 # ===== terminal equalities: x1(T) = 1.25, x2(T) = 1.0 =====
 def terminal_eq_psi(xT_ad, theta):
-    return np.array([
+    return jnp.array([
         xT_ad[0] - 1.25,
         xT_ad[1] - 1.0,
-    ], dtype=object)
+    ])
 
 problem.add_terminal_eq(terminal_eq_psi)
 

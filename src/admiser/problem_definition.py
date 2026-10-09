@@ -1,8 +1,6 @@
 # problem_definition.py
-from contextlib import contextmanager
-
 import numpy as np
-import cppad_py
+import jax.numpy as jnp
 
 from .quadrature import validate_quad_scheme
 
@@ -10,18 +8,23 @@ from .quadrature import validate_quad_scheme
 #: integrator, and costing no extra dynamics evaluations.
 DEFAULT_QUAD_SCHEME = 'rk4'
 
+#: Default number of RK4 substeps per control segment.
+DEFAULT_M_SUB = 5
+
 
 class OCPProblem:
     """
     Unified container for an optimal control problem.
 
-    - The objective is built by objective_builder(U[a_double], theta[a_double], problem).
-    - Constraints are registered through the add_* API in canonical form and
-      assembled into AD tapes together:
+    - The objective is declared with make_builders(dyn=..., L=..., Phi=...).
+    - Constraints are registered through the add_* API in canonical form:
         equality  : G(z) = 0
         inequality: C(z) >= 0
-    - Dynamics and integration are handled by `integrator`, which must accept
-      accumulate_cb, t0 and quad.
+    - The state is advanced by classical RK4, with m_sub substeps on every
+      control segment.
+    - Every model function -- dyn, L, Phi and each constraint function -- must be
+      written with jax.numpy (jnp.array, jnp.exp, jnp.where, ...), because the
+      solver differentiates them with JAX.
     - Control initial guess u0 accepts several shapes and is expanded to a flat
       vector of length N*nu:
         * scalar : one value for every step and every control component
@@ -40,18 +43,16 @@ class OCPProblem:
         dt: float,
         x0: np.ndarray,
         u0=None,                           # optional control initial guess (shapes above)
-        dyn=None,                          # dyn(x, u, theta=None) -> np.array(dtype=object)
-        integrator=None,                   # integrator(x, u, dt_k, f, accumulate_cb=None, t0=None, quad='rk4')
+        dyn=None,                          # dyn(x, u, theta=None) -> jnp.array of length nx
+        m_sub: int = DEFAULT_M_SUB,        # RK4 substeps per control segment
         nu: int,
         nx: int,
-        objective_builder=None,            # required
-        constraint_builder=None,           # legacy interface, may be None (not recommended)
+        objective_builder=None,            # required: make_builders(dyn=..., L=..., Phi=...)
         control_bounds_builder=None,       # -> list[(low, high)] of length N*nu
         ntheta: int = 0,
         theta0: np.ndarray | None = None,
         param_bounds_builder=None,         # -> list[(low, high)] of length ntheta
-        x0_from_theta_ad=None,             # optional: a_double version of x0(theta)
-        x0_from_theta_numeric=None,        # optional: numeric version of x0(theta)
+        x0_from_theta=None,                # optional: x0_from_theta(theta, problem) -> x(0)
     ):
         self.N  = int(N)
         self.dt = float(dt)
@@ -62,11 +63,12 @@ class OCPProblem:
         self.nx = int(nx)
 
         self.dyn = dyn
-        self.integrator = integrator
+        # The state is advanced by RK4 with this many substeps per segment. A larger
+        # m_sub means a more accurate state and more accurate integrals, at a cost
+        # that grows linearly with it.
+        self.m_sub = int(m_sub)
 
-        self.objective_builder  = objective_builder
-        # Legacy hook kept for backwards compatibility; prefer the add_* API.
-        self.constraint_builder = constraint_builder
+        self.objective_builder = objective_builder
 
         self.control_bounds_builder = control_bounds_builder
 
@@ -74,9 +76,8 @@ class OCPProblem:
         self.theta0 = None if theta0 is None else np.asarray(theta0, dtype=float)
         self.param_bounds_builder = param_bounds_builder
 
-        # Optional theta-dependent initial state
-        self._x0_from_theta_ad      = x0_from_theta_ad
-        self._x0_from_theta_numeric = x0_from_theta_numeric
+        # Optional theta-dependent initial state; see initial_state().
+        self.x0_from_theta = x0_from_theta
 
         # Canonical constraint registries
         self.term_eq_specs   = []  # psi_i(xT, theta) = 0
@@ -105,17 +106,6 @@ class OCPProblem:
         # Time-scaling transform (CPET); None until set_time_scaling() is called.
         # See that method for what it does and why.
         self.time_scaling = None
-
-        # Set only while a tape is being recorded, by taping_time_scaling(). It
-        # holds the a_double segment durations sliced out of the independent
-        # variables, which is how dt_of_segment() reaches them.
-        self._atau = None
-
-        # Transient epsilon adjustment. Only set briefly by OCPSolver through
-        # scaled_eps() and always restored afterwards, so the value registered
-        # in spec["eps"] always stays exactly what the user wrote.
-        self._eps_factor = 1.0
-        self._eps_override = None
 
     # ---------- automatic scaling ----------
     def set_scaling(self, objective="auto", constraints="auto") -> "OCPProblem":
@@ -256,19 +246,6 @@ class OCPProblem:
             return float(self.time_scaling["total_time"])
         return float(np.sum(self.time_scaling["tau0"]))
 
-    @contextmanager
-    def taping_time_scaling(self, atau):
-        """
-        Make the a_double durations visible to dt_of_segment() while a tape is
-        being recorded. Mirrors scaled_eps(): set on entry, always restored on exit.
-        """
-        old = self._atau
-        self._atau = atau
-        try:
-            yield self
-        finally:
-            self._atau = old
-
     # ---------- transcription strategy ----------
     def set_transcription(self, mode: str = "single", n_rounds: int = 4,
                           shrink: float = 0.1) -> "OCPProblem":
@@ -331,37 +308,36 @@ class OCPProblem:
         n, s = cfg["n_rounds"], cfg["shrink"]
         return [(1.0 / s) ** (n - 1 - k) for k in range(n)]
 
-    @contextmanager
-    def scaled_eps(self, factor: float = 1.0, override: float | None = None):
+    def eps_gamma(self, factor: float = 1.0, eps: float | None = None):
         """
-        Temporarily change the effective eps of every path constraint inside the
-        with-block: `override` wins (absolute value), otherwise the registered
-        value is scaled by `factor`. The previous state is always restored on
-        exit, so spec["eps"] is never mutated and the same problem can be solved
-        repeatedly without drifting.
-        """
-        old = (self._eps_factor, self._eps_override)
-        self._eps_factor = float(factor)
-        self._eps_override = None if override is None else float(override)
-        try:
-            yield self
-        finally:
-            self._eps_factor, self._eps_override = old
+        The eps and gamma of every path inequality for one round, as two arrays
+        with one entry per add_path_ineq call, in registration order.
 
-    def effective_eps(self, spec: dict) -> float:
-        """The eps currently in effect for this path constraint."""
-        if self._eps_override is not None:
-            return self._eps_override
-        return float(spec["eps"]) * self._eps_factor
+        eps   : the registered eps times `factor`; an explicit `eps` replaces it
+                for every path constraint
+        gamma : automatic ones follow eps (auto_gamma); explicitly given ones stay
+                as registered
 
-    def effective_gamma(self, spec: dict) -> float:
+        The solver passes these arrays into the compiled NLP at call time, so the
+        registered values themselves are never modified.
         """
-        The gamma currently in effect: automatic ones follow eps, explicitly
-        given ones stay fixed.
+        specs = self.path_ineq_specs
+        if eps is None:
+            eps_arr = np.array([float(s["eps"]) * float(factor) for s in specs], dtype=float)
+        else:
+            eps_arr = np.full(len(specs), float(eps), dtype=float)
+        gamma_arr = np.array(
+            [self.auto_gamma(e) if s.get("gamma_auto", False) else float(s["gamma"])
+             for s, e in zip(specs, eps_arr)],
+            dtype=float)
+        return eps_arr, gamma_arr
+
+    def transcription_rounds(self) -> list:
         """
-        if spec.get("gamma_auto", False):
-            return self.auto_gamma(self.effective_eps(spec))
-        return float(spec["gamma"])
+        The (eps, gamma) arrays of every round, in the order the rounds run;
+        see eps_factors() and eps_gamma().
+        """
+        return [self.eps_gamma(factor) for factor in self.eps_factors()]
 
     # ---------- quadrature scheme resolution ----------
     def resolve_quad_scheme(self) -> str:
@@ -383,7 +359,7 @@ class OCPProblem:
 
     # ---------- canonical constraint registration ----------
     def add_terminal_eq(self, psi):
-        """psi(xT, theta) -> a_double, or a vector of a_double."""
+        """psi(xT, theta) = 0, with psi returning a scalar or a 1-D array."""
         self.term_eq_specs.append(dict(psi=psi))
 
     def add_terminal_ineq(self, phi, sense: str = "<="):
@@ -392,7 +368,7 @@ class OCPProblem:
         self.term_ineq_specs.append(dict(phi=phi, sense=sense))
 
     def add_integral_eq(self, qfun, target: float):
-        """int q dt = target, with qfun(t, x, u, theta) -> a_double."""
+        """int q dt = target, with qfun(t, x, u, theta) -> a scalar."""
         self.int_eq_specs.append(dict(qfun=qfun, target=float(target)))
 
     def add_integral_ineq(self, qfun, bound: float, sense: str = "<="):
@@ -449,45 +425,30 @@ class OCPProblem:
     def has_params(self) -> bool:
         return self.ntheta > 0
 
-    def dt_of_segment(self, k: int):
-        """
-        Duration of segment k, as an a_double. Both the objective tape and the
-        constraint tapes must go through this single entry point; otherwise a
-        future time-scaling transform (CPET) would silently give them different
-        time grids. Subclasses or users may implement _current_dt(k) returning an
-        a_double to support variable step sizes.
-        """
-        # CPET: while a tape is being recorded the durations are decision
-        # variables, so hand back the a_double for this segment. Everything
-        # downstream -- the RK4 step, the quadrature weights, the running time --
-        # then becomes a function of tau automatically, which is exactly the
-        # transformed system dx/ds = tau_k * f and dt/ds = tau_k.
-        if self._atau is not None:
-            return self._atau[k]
-        if self.has_time_scaling():
-            # Numeric path (no tape): use the current duration guess.
-            return float(self.time_scaling["tau0"][k])
-        if callable(getattr(self, "_current_dt", None)):
-            return self._current_dt(k)
-        return cppad_py.a_double(self.dt)
-
     def validate(self) -> None:
         """
-        Structural check run before taping, so that CppAD/SciPy internals are
-        never the first thing a user sees when something is misconfigured.
+        Structural check run before anything is compiled, so that JAX/SciPy
+        internals are never the first thing a user sees when something is
+        misconfigured.
         """
-        if not callable(self.objective_builder):
+        ob = self.objective_builder
+        if not all(hasattr(ob, name) for name in ("dyn", "L", "Phi", "quad")):
             raise ValueError(
-                "OCPProblem.objective_builder is not set. Build one with "
-                "make_builders(dyn=..., L=..., Phi=...) and pass it as "
+                "OCPProblem.objective_builder must be created with "
+                "make_builders(dyn=..., L=..., Phi=...) and passed as "
                 "OCPProblem(objective_builder=...)."
-            )
-        if not callable(self.integrator):
-            raise ValueError(
-                "OCPProblem.integrator is not set, e.g. partial(rk4_substeps, m_sub=10)."
             )
         if not callable(self.dyn):
             raise ValueError("OCPProblem.dyn is not set.")
+        if ob.dyn is not self.dyn:
+            # There is exactly one rollout, driven by problem.dyn. A different dyn
+            # in make_builders would silently be ignored, so refuse it instead.
+            raise ValueError(
+                "make_builders(dyn=...) and OCPProblem(dyn=...) were given different "
+                "functions; pass the same dynamics to both."
+            )
+        if self.m_sub < 1:
+            raise ValueError(f"m_sub must be at least 1, got {self.m_sub}.")
         if self.N <= 0 or self.dt <= 0:
             raise ValueError(f"N > 0 and dt > 0 are required, got N={self.N}, dt={self.dt}.")
         if self.x0.shape != (self.nx,):
@@ -513,20 +474,19 @@ class OCPProblem:
             print("[ADMISER] Note: ntheta > 0 but no theta0 was given; theta starts at all zeros.")
         self.resolve_quad_scheme()
 
-    # Initial state for AD taping: returns a_double values.
-    def ad_initial_state(self, atheta):
-        if callable(self._x0_from_theta_ad):
-            return self._x0_from_theta_ad(atheta, self)
-        return np.array([cppad_py.a_double(v) for v in self.x0], dtype=object)
+    def initial_state(self, theta=None):
+        """
+        The initial state x(0): x0_from_theta(theta, problem) when that hook was
+        given, otherwise the fixed x0.
 
-    # Initial state for the numeric rollout / plotting: returns float values.
-    # The trigger condition must match ad_initial_state exactly (only whether the
-    # hook is callable); otherwise X_opt would not correspond to the trajectory
-    # that was actually optimised inside the tape. The hook must handle theta=None.
-    def numeric_initial_state(self, theta=None):
-        if callable(self._x0_from_theta_numeric):
-            return self._x0_from_theta_numeric(theta, self)
-        return self.x0.copy()
+        JAX evaluates and differentiates the same function, so one hook serves
+        both the optimisation and the replay of the optimal trajectory. (The CppAD
+        version needed two: one for AD values and one for plain floats.) theta is
+        None when the problem has no system parameters.
+        """
+        if callable(self.x0_from_theta):
+            return jnp.asarray(self.x0_from_theta(theta, self), dtype=float)
+        return jnp.asarray(self.x0, dtype=float)
 
     # ---------- control initial guess expansion ----------
     def _expand_u0(self) -> np.ndarray:
