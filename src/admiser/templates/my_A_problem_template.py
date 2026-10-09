@@ -125,10 +125,11 @@ problem.add_integral_ineq(qfun=q_budget, bound=50.0, sense="<=")
 # (see OCPProblem.auto_gamma).
 # Never write gamma=0.0: that forces h(t) <= -eps, a strictly interior solution
 # that is both conservative and hard to converge.
-# eps CARRIES UNITS -- scale it to the magnitude of your own h. When unsure, let
-# a continuation solve walk it down from a large value (section 10).
+# eps is the smoothing width of the FIRST round, and it CARRIES UNITS -- choose it
+# relative to the size of your own h. A continuation solve (section 10) then walks
+# it down from there.
 def h_ineq(t, x, u, th): return x[1] - 3.0   # example: keep x2 below 3
-problem.add_path_ineq(hfun=h_ineq, eps=1e-2)
+problem.add_path_ineq(hfun=h_ineq, eps=1.0)
 
 # 9.6 terminal inequality: phi(xT, theta) <= 0 or >= 0
 # def phi_T(xT_ad, th): return xT_ad[0] - 0.5
@@ -138,12 +139,15 @@ problem.add_path_ineq(hfun=h_ineq, eps=1e-2)
 # mode="single" (the default -- omit this call entirely to get it)
 #     Solve once with the eps/gamma registered by add_path_ineq above.
 # mode="continuation"
-#     eps -> 0 continuation: the registered eps is the FINAL value, and the rounds
-#     start from eps/shrink^(n_rounds-1) and shrink each round, warm-starting from
-#     the previous solution. A large eps is smooth and easy but loose; a small eps
-#     approaches the true constraint but also a nondifferentiable hinge, so walking
-#     it down gets both. Below, eps runs 1e1 -> 1e0 -> 1e-1 -> 1e-2.
-problem.set_transcription(mode="continuation", n_rounds=4, shrink=0.1)
+#     eps -> 0 continuation, from inexact to exact: the rounds start at the
+#     registered eps and multiply it by `shrink` every round, warm-starting from the
+#     previous solution (an explicit gamma shrinks by the same factor). A large eps
+#     is smooth and easy but loose; a small eps approaches the true constraint but
+#     also a nondifferentiable hinge, so walking it down gets both. The solve stops
+#     early if a round fails and returns the last round that converged -- check
+#     res["status"] (0 means every round converged). Below, eps runs
+#     1e0 -> 1e-1 -> 1e-2.
+problem.set_transcription(mode="continuation", n_rounds=3, shrink=0.1)
 
 # ============= 11) optional: the time-scaling transform (CPET) =============
 # Off by default. Enabling it makes the SEGMENT DURATIONS decision variables, so

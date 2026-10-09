@@ -184,9 +184,9 @@ def test_reported_residuals_are_in_user_units():
     """
     EX = importlib.reload(importlib.import_module("admiser.examples.my_port_kobe"))
     p = EX.problem
-    # Single mode on purpose. Under continuation the last round uses the registered
-    # (final) eps while to_nlp() uses the FIRST round's eps, so the two would
-    # be evaluating genuinely different constraints -- a difference of 100x here,
+    # Single mode on purpose. Under continuation the returned round uses a shrunk
+    # eps while to_nlp() uses the registered (first-round) eps, so the two would be
+    # evaluating genuinely different constraints -- a difference of 100x here,
     # since gamma = T*eps/4 -- and the comparison would say nothing about units.
     p.set_transcription(mode="single")
     scaled = OCPSolver(p).solve(maxiter=3000, ftol=1e-10, verbose=False)

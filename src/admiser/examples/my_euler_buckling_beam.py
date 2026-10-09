@@ -70,10 +70,10 @@ def hfun(t, x, u, th):
     return 0.5 - x[2]
 
 # Omitting gamma gives gamma = T*eps/4 automatically, kept in sync as eps shrinks.
-problem.add_path_ineq(hfun=hfun, eps=1e-6)
+problem.add_path_ineq(hfun=hfun, eps=1e-2)
 
 # ===== solve mode: declared here, the solving side just calls OCPSolver(problem).solve() =====
-# eps is the FINAL value; the rounds run 1e-2 -> 1e-3 -> 1e-4 -> 1e-5 -> 1e-6, warm-started.
+# eps is the STARTING value; the rounds run 1e-2 -> 1e-3 -> 1e-4 -> 1e-5 -> 1e-6, warm-started.
 problem.set_transcription(mode="continuation", n_rounds=5, shrink=0.1)
 
 __all__ = ["problem", "T", "N", "dt", "hfun"]

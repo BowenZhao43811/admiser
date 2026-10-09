@@ -72,12 +72,12 @@ def h(t_ad, x_ad, u_ad, atheta):
     uu = u_ad[0]
     return uu + 1/6 * x1                   # feasible where h <= 0
 
-# Teo's transcription: int L_eps(h) dt <= gamma.
+# Teo's transcription: int L_eps(h) dt <= gamma. eps is the STARTING value.
 # Omitting gamma gives gamma = T*eps/4 automatically, kept in sync as eps shrinks.
-problem.add_path_ineq(h, eps=1e-3)
+problem.add_path_ineq(h, eps=1.0)
 
 # ===== solve mode: declared here, the solving side just calls OCPSolver(problem).solve() =====
-# eps is the FINAL value; the rounds run 1e0 -> 1e-1 -> 1e-2 -> 1e-3, warm-started.
+# The rounds run 1e0 -> 1e-1 -> 1e-2 -> 1e-3, each warm-started from the previous one.
 problem.set_transcription(mode="continuation", n_rounds=4, shrink=0.1)
 
 __all__ = ["problem", "N", "dt", "T", "h"]

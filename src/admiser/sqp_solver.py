@@ -1,11 +1,39 @@
 # sqp_solver.py
 
+import warnings
+
 import numpy as np
 from scipy.optimize import minimize
 
 from .ocp_to_nlp import build_nlp
 from .nlp_functions import NLPFunctions
 from .problem_scaling import compute_scaling
+
+# ---------------------------------------------------------------------------
+# Why solve() stopped: result["status"].
+#
+# These are ADMISER's own codes and describe the solve as a whole -- every round
+# of a continuation, or the single round of a plain solve. SciPy's SLSQP status of
+# each individual round is kept as well, in result["rounds"][k]["scipy_status"].
+#
+# An integer rather than just success/failure, because the cases call for
+# different reactions: "converged", "ran out of iterations but produced something
+# usable" and "failed" are not the same thing, and a bool would merge them.
+# ---------------------------------------------------------------------------
+STATUS_CONVERGED = 0            # every round converged
+STATUS_MAX_ITERATIONS = 1       # a round hit maxiter; its iterate is returned, not converged
+STATUS_SLSQP_FAILURE = 2        # a later round failed; the last converged round is returned
+STATUS_NO_ROUND_SUCCEEDED = 3   # the first round failed; its iterate is returned, not converged
+
+STATUS_MESSAGES = {
+    STATUS_CONVERGED: "every round converged",
+    STATUS_MAX_ITERATIONS: "stopped: a round hit the SLSQP iteration limit; "
+                           "its iterate is returned but is NOT converged",
+    STATUS_SLSQP_FAILURE: "stopped: SLSQP failed in a later round; "
+                          "the last round that converged is returned",
+    STATUS_NO_ROUND_SUCCEEDED: "the first round already failed; "
+                               "its iterate is returned but is NOT converged",
+}
 
 
 class OCPSolver:
@@ -21,7 +49,11 @@ class OCPSolver:
                  checking gradients, e.g. against finite differences.
 
     ------------- result dictionary -------------
-    scipy_result : the SciPy result of the final round
+    status       : int, why the solve stopped -- one of the STATUS_* codes above;
+                   0 is the only clean success
+    message      : str, the readable form of status
+    success      : bool, status == 0
+    scipy_result : the SciPy result of the round whose solution is returned
     U_opt        : ndarray (N*nu,), optimal control
     theta_opt    : ndarray (ntheta,), optimal system parameters (None if there are none)
     tau_opt      : ndarray (N,), optimal segment durations under the time-scaling
@@ -34,12 +66,17 @@ class OCPSolver:
     ineq_resid   : ndarray, inequality residual C(z), should be >= 0 (None if there are none)
     path_viol    : ndarray, max h(t) on the grid for each path inequality, should be <= 0
                    (None if there are none)
-    history_cost : ndarray, cost history of the final round's iterations
+    history_cost : ndarray, cost history of that round's iterations
     scaling      : the ProblemScaling that was applied. Every value above is
                    already converted back into the user's units; this is here so
                    the transform is inspectable rather than invisible
-    rounds       : list[dict], per round: eps, gamma, J_opt, max_path_viol, status, nit.
-                   Length 1 in "single" mode, so callers never need to branch on the mode.
+    final_eps    : list, the eps of every path inequality in the returned round
+    final_gamma  : list, the gamma of every path inequality in the returned round
+    rounds       : list[dict], one per round that was RUN: eps, gamma, J_opt,
+                   max_path_viol, success, scipy_status, message (SciPy's), nit,
+                   returned (True for the round whose solution is returned).
+                   Length 1 in "single" mode, so callers never need to branch on
+                   the mode. Rounds after a failure are not run.
 
     ------------- notes -------------
     - solve() never mutates the problem: each round's eps and gamma are handed to
@@ -65,8 +102,21 @@ class OCPSolver:
         Solve the problem. The mode comes from problem.set_transcription():
 
           mode="single"       : solve once with the registered eps/gamma
-          mode="continuation" : solve over a descending geometric eps schedule,
-                                warm-starting each round from the previous solution
+          mode="continuation" : start from the registered eps/gamma and shrink them
+                                round by round, warm-starting each round from the
+                                previous solution
+
+        A continuation stops at the first round that fails:
+          * a round that only ran out of iterations (maxiter) is still adopted,
+            because its iterate is usually far better than where it started --
+            status 1, NOT converged;
+          * any other failure in a later round returns the last round that
+            converged -- status 2;
+          * if the very first round fails, its iterate is returned anyway, since
+            there is nothing better -- status 3, NOT converged.
+        Anything but status 0 also raises a RuntimeWarning, so a result that did
+        not converge is never returned silently. See result["status"],
+        result["message"] and result["rounds"].
 
         Parameters
         ----------
@@ -78,11 +128,15 @@ class OCPSolver:
         """
         p = self.problem
         schedule = p.transcription_rounds()      # one (eps, gamma) pair per round
+        n_rounds = len(schedule)
         if verbose is None:
-            verbose = len(schedule) > 1
+            verbose = n_rounds > 1
 
         z = p.initial_guess() if z0 is None else np.asarray(z0, dtype=float)
-        rounds, res = [], None
+        rounds = []
+        chosen = None        # the result that will be returned
+        chosen_round = None  # ... and the index of the round it came from
+        status = STATUS_NO_ROUND_SUCCEEDED
 
         # Compiled once; every round below reuses it, because a round differs
         # from the previous one only in the VALUES of eps and gamma.
@@ -95,25 +149,65 @@ class OCPSolver:
             # be invisible.
             if verbose and k == 0:
                 print(self.scaling.describe())
+
             res = self._solve_once(z, maxiter=maxiter, ftol=ftol, disp=disp)
-            z = res["scipy_result"].x
-            eps_now, gam_now = eps.tolist(), gamma.tolist()
+            sp = res["scipy_result"]
+            res["final_eps"], res["final_gamma"] = eps.tolist(), gamma.tolist()
 
             viol = res["path_viol"]
             max_viol = float(np.max(viol)) if viol is not None and viol.size else float("nan")
-            rounds.append(dict(eps=eps_now, gamma=gam_now, J_opt=res["J_opt"],
-                               max_path_viol=max_viol,
-                               status=res["scipy_result"].status,
-                               nit=res["scipy_result"].nit))
+            rounds.append(dict(eps=eps.tolist(), gamma=gamma.tolist(), J_opt=res["J_opt"],
+                               max_path_viol=max_viol, success=bool(sp.success),
+                               scipy_status=int(sp.status), message=str(sp.message),
+                               nit=int(sp.nit), returned=False))
             if verbose:
-                e = f"{min(eps_now):.3e}" if eps_now else "-"
+                e = f"{float(np.min(eps)):.3e}" if eps.size else "-"
                 v = "n/a" if not np.isfinite(max_viol) else f"{max_viol:+.3e}"
-                print(f"[ADMISER] round {k+1}/{len(schedule)}  eps={e}  "
+                print(f"[ADMISER] round {k+1}/{n_rounds}  eps={e}  "
                       f"J={res['J_opt']:+.8g}  max h(t)={v}  "
-                      f"status={res['scipy_result'].status}  nit={res['scipy_result'].nit}")
+                      f"SLSQP status={sp.status}  nit={sp.nit}")
 
-        res["rounds"] = rounds
-        return res
+            if sp.success:
+                # Converged: keep this result and warm-start the next, tighter round.
+                chosen, chosen_round, status = res, k, STATUS_CONVERGED
+                z = sp.x
+                continue
+
+            # ---- this round failed, so the continuation stops here ----
+            if int(sp.nit) >= maxiter:
+                # Only the iteration budget ran out. The iterate is usually far
+                # better than where this round started, so it is adopted -- but it
+                # is not converged, and the status says so.
+                chosen, chosen_round, status = res, k, STATUS_MAX_ITERATIONS
+            elif chosen is None:
+                # Not even the first round converged. Its iterate is returned
+                # anyway: in "single" mode it is the only result there is, and
+                # SLSQP often stops close to a good point. Flagged, not hidden.
+                chosen, chosen_round, status = res, k, STATUS_NO_ROUND_SUCCEEDED
+            else:
+                # A later round failed: SLSQP has reached the eps it can handle.
+                # The previous round converged, so that is the result.
+                status = STATUS_SLSQP_FAILURE
+            break
+
+        rounds[chosen_round]["returned"] = True
+        out = dict(chosen)
+        out.update(status=status, message=STATUS_MESSAGES[status],
+                   success=(status == STATUS_CONVERGED), rounds=rounds)
+
+        if verbose:
+            print(f"[ADMISER] status {status}: {STATUS_MESSAGES[status]}"
+                  f" (returning round {chosen_round + 1}/{n_rounds})")
+        if status != STATUS_CONVERGED:
+            failed = rounds[-1]
+            warnings.warn(
+                f"[ADMISER] {STATUS_MESSAGES[status]}. Round {len(rounds)}/{n_rounds} "
+                f"ended with SLSQP status {failed['scipy_status']} "
+                f"({failed['message']}) after {failed['nit']} iterations; "
+                f"the solution of round {chosen_round + 1} is returned. "
+                "Check result['status'] and result['rounds'] before using it.",
+                RuntimeWarning, stacklevel=2)
+        return out
 
     def to_nlp(self, eps=None):
         """
@@ -127,9 +221,9 @@ class OCPSolver:
             nlp = OCPSolver(problem).to_nlp()
             g_ad = nlp.objective_grad(z)
 
-        eps : which eps to use. None (default) uses the eps the FIRST continuation
-              round would actually use (in "single" mode that is the registered
-              value itself). Passing a number applies it to every path constraint.
+        eps : which eps to use. None (default) uses the registered eps, which is
+              the value of the first round. Passing a number applies it to every
+              path constraint.
         """
         p = self.problem
         self._compile()

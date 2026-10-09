@@ -258,17 +258,20 @@ class OCPProblem:
             Solve once with the eps/gamma registered by add_path_ineq.
 
         mode="continuation"
-            Solve by an eps -> 0 continuation. The eps registered with
-            add_path_ineq is treated as the FINAL value; the rounds actually run
-                eps/shrink^(n_rounds-1), ..., eps/shrink, eps
-            each warm-started from the previous round's solution, so the last
-            round lands exactly on the registered value. For constraints whose
-            gamma was left automatic (add_path_ineq called without gamma), gamma
-            is re-derived as T*eps/4 every round.
+            Solve by an eps -> 0 continuation, from inexact to exact. The eps
+            registered with add_path_ineq is the STARTING value; the rounds run
+                eps, eps*shrink, eps*shrink^2, ..., eps*shrink^(n_rounds-1)
+            each warm-started from the previous round's solution. gamma shrinks
+            along with it: an automatic gamma (add_path_ineq called without gamma)
+            is re-derived as T*eps/4 every round, and an explicit gamma is
+            multiplied by the same shrink factor as eps.
 
-            The starting point is given as a shrink RATIO rather than an absolute
-            value: eps carries the units of its own h, so several path constraints
-            cannot share one absolute start, but they can share a ratio.
+            Each path constraint keeps its own eps, because eps carries the units
+            of its own h; what they share is the shrink ratio.
+
+            The solve stops early as soon as a round fails: SLSQP has then reached
+            the eps it can still handle. OCPSolver.solve() returns the last round
+            that converged and says why it stopped (result["status"]).
 
         Why continuation: with a large eps, L_eps is smooth and easy to solve but
         the constraint is loose; with a small eps it approaches the true
@@ -295,18 +298,18 @@ class OCPProblem:
 
     def eps_factors(self) -> list:
         """
-        Multipliers applied to the registered eps, one per round, in DESCENDING
-        order; the last one is always 1.0 (the registered value itself).
+        Multipliers applied to the registered eps (and to an explicit gamma), one
+        per round; the first one is always 1.0, the registered value itself.
 
-        "single" returns [1.0]; "continuation" returns [(1/s)^(n-1), ..., 1/s, 1.0].
-        Example: n_rounds=4, shrink=0.1, registered eps=1e-4 -> the rounds use
+        "single" returns [1.0]; "continuation" returns [1, s, s^2, ..., s^(n-1)].
+        Example: n_rounds=4, shrink=0.1, registered eps=1e-1 -> the rounds use
         eps = 1e-1, 1e-2, 1e-3, 1e-4.
         """
         cfg = self.transcription
         if cfg["mode"] == "single":
             return [1.0]
         n, s = cfg["n_rounds"], cfg["shrink"]
-        return [(1.0 / s) ** (n - 1 - k) for k in range(n)]
+        return [s ** k for k in range(n)]
 
     def eps_gamma(self, factor: float = 1.0, eps: float | None = None):
         """
@@ -315,8 +318,8 @@ class OCPProblem:
 
         eps   : the registered eps times `factor`; an explicit `eps` replaces it
                 for every path constraint
-        gamma : automatic ones follow eps (auto_gamma); explicitly given ones stay
-                as registered
+        gamma : automatic ones follow eps (auto_gamma); explicitly given ones are
+                the registered gamma times the same `factor`
 
         The solver passes these arrays into the compiled NLP at call time, so the
         registered values themselves are never modified.
@@ -327,7 +330,7 @@ class OCPProblem:
         else:
             eps_arr = np.full(len(specs), float(eps), dtype=float)
         gamma_arr = np.array(
-            [self.auto_gamma(e) if s.get("gamma_auto", False) else float(s["gamma"])
+            [self.auto_gamma(e) if s.get("gamma_auto", False) else float(s["gamma"]) * float(factor)
              for s, e in zip(specs, eps_arr)],
             dtype=float)
         return eps_arr, gamma_arr
@@ -399,11 +402,15 @@ class OCPProblem:
 
     def add_path_ineq(self, hfun, eps: float, gamma: float | None = None):
         """
-        h(x, u, theta) <= 0   -->   int L_eps(h) dt <= gamma
+        h(t, x, u, theta) <= 0   -->   int L_eps(h) dt <= gamma
+
+        eps is the smoothing width of the FIRST round; a continuation solve (see
+        set_transcription) shrinks it round by round. It carries the units of h,
+        so choose it relative to the size of h.
 
         gamma=None (default) means gamma is taken automatically as
-        auto_gamma(eps) = T*eps/4, and is kept in sync whenever a continuation
-        solve shrinks eps. Passing an explicit number pins it instead.
+        auto_gamma(eps) = T*eps/4, recomputed from eps every round. An explicit
+        number is the first round's gamma, and shrinks by the same factor as eps.
         """
         auto = gamma is None
         self.path_ineq_specs.append(dict(

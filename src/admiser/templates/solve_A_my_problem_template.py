@@ -26,6 +26,8 @@ def main():
                                          # above is already back in your own units
 
     print("\n=== results ===")
+    # status 0 means every round converged; anything else comes with a warning.
+    print(f"status {res['status']}: {res['message']}")
     if sc is not None and not sc.is_identity:
         print("(solved with automatic scaling:", sc.describe().splitlines()[0], ")")
     print("J* =", J_opt)
@@ -43,7 +45,8 @@ def main():
     if len(res.get("rounds", [])) > 1:      # continuation: eps/gamma and violation per round
         for i, r in enumerate(res["rounds"]):
             print(f"  [{i+1}] eps={min(r['eps']):.1e}  gamma={min(r['gamma']):.3e}  "
-                  f"J={r['J_opt']:+.10g}  max h(t)={r['max_path_viol']:+.3e}")
+                  f"J={r['J_opt']:+.10g}  max h(t)={r['max_path_viol']:+.3e}  "
+                  f"SLSQP status={r['scipy_status']}")
 
     # states
     plt.figure()

@@ -96,14 +96,14 @@ problem = OCPProblem(
 problem.quad_scheme = 'rk4'
 problem.add_terminal_eq(terminal_eq_psi)
 
-# All four path constraints share one eps. Omitting gamma gives the consistent
-# value gamma = T*eps/4 automatically, kept in sync as eps shrinks.
+# All four path constraints share one starting eps. Omitting gamma gives the
+# consistent value gamma = T*eps/4 automatically, kept in sync as eps shrinks.
 for _h in PATH_INEQS:
-    problem.add_path_ineq(_h, eps=1e-2)
+    problem.add_path_ineq(_h, eps=1.0)
 
 # ===== solve mode: declared here, the solving side just calls OCPSolver(problem).solve() =====
-# eps is the FINAL value; the rounds run 1e0 -> 1e-1 -> 1e-2, warm-started,
-# with all four constraints shrinking together.
+# The rounds run 1e0 -> 1e-1 -> 1e-2, warm-started, with all four constraints
+# shrinking together.
 problem.set_transcription(mode="continuation", n_rounds=3, shrink=0.1)
 # noscaling on objective and constraints
 problem.set_scaling(objective="none", constraints="none")
