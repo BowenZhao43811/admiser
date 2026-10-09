@@ -5,15 +5,15 @@ ADMISER is a **Numerical Optimal Control** toolkit that incorporates **Automatic
 
 - ✅ **Control Parametrization** (piecewise-constant controls; policy/feedback parametrization)
 - ✅ **Time Scaling (CPET)**: segment durations become decision variables, so switching instants and free terminal times are found exactly instead of being quantised to a fixed grid
-- ✅ **Constraint Transcription** (smooth path inequalities → canonical integral constraints), with an ε→0 **continuation loop**
+- ✅ **Constraint Transcription** (smooth path inequalities → canonical integral constraints), with an ε→0 **continuation loop** that tightens the approximation round by round, from inexact to exact
 - ✅ **Canonical constraints**: terminal eq/ineq, integral eq/ineq, path eq/ineq (smoothed)
 - ✅ **Multi-substep RK4** integrator with **4th-order** substep quadrature (cost integrals are as accurate as the state trajectory, at no extra dynamics evaluations)
 - ✅ **System Parameters** are simultaneously optimized within the same framework (if have)
-- ✅ **Automatic Differentiation** via `cppad_py` tapes (objective + constraints Jacobians)
+- ✅ **Automatic Differentiation** via [JAX](https://github.com/jax-ml/jax), in reverse mode: one compiled function delivers the objective, every constraint and all their derivatives
 - ✅ **Automatic Scaling**: objective and constraints are normalised internally so SLSQP's absolute `ftol` behaves as the relative tolerance users expect; every reported number comes back in your own units
 - ✅ **SQP** method for solving nonlinear programming problem
 
-> ⚠️ **Strict prerequisite**: `cppad_py` requires a local build on Linux/WSL. ADMISER provides a helper script to build and install it.
+> ✅ **Runs natively on Windows and Linux.** Everything installs with `pip` — no compiler, no system libraries, no WSL.
 
 ---
 
@@ -24,9 +24,10 @@ ADMISER is a **Numerical Optimal Control** toolkit that incorporates **Automatic
 - [Problem Template](#problem-template)
 - [Registering Constraints](#registering-constraints)
 - [Choosing ε and γ](#choosing-ε-and-γ)
+- [Solve Status](#solve-status)
 - [Automatic Scaling](#automatic-scaling)
 - [Quadrature Accuracy](#quadrature-accuracy)
-- [Writing AD-safe Model Functions](#writing-ad-safe-model-functions)
+- [Writing Model Functions for JAX](#writing-model-functions-for-jax)
 - [Time Scaling (CPET)](#time-scaling-cpet)
 - [Free Terminal Time](#free-terminal-time)
 - [Cite / Acknowledge](#cite--acknowledge)
@@ -35,62 +36,41 @@ ADMISER is a **Numerical Optimal Control** toolkit that incorporates **Automatic
 
 ## Install
 
-### install WSL on Windows
-Install WSL and a Linux distribution.
+ADMISER is pure Python on top of NumPy, SciPy and JAX, and all of them install
+with `pip`. It runs natively on **Windows** and on **Linux**; no compiler is needed.
+
+### 1. create a virtual environment
+A venv keeps ADMISER and its dependencies out of your global Python.
+
+Windows (PowerShell):
 ```powershell
-# install system components for WSL
-wsl --install
-# install a Linux distribution on WSL
-wsl.exe --install Ubuntu
-```
-> ⚠️ Only the minimum requirements are given here; for details on WSL please refer to Microsoft's official documentation.
-
-Create a user in the Linux system
-```powershell
-Create a default Unix user account: ****** (Input your user name)
-# password won't show in Linux.
-New password: ****** (Input your user password)
-Retype new password: ****** (Reinput your user password)
-passwd: password updated successfully # success!
+python -m venv admiser_venv
+admiser_venv\Scripts\activate
 ```
 
-### update Ubuntu system components
-```sh
-# Switch from windows file system to linux
-cd ~
-# update
-sudo apt update
-sudo apt upgrade -y
-```
-
-### install Python development tools
-Install Python, package management tools, virtual environment management tools, and Python development tools on Linux `python3`, `pip`, `venv`, `dev`.
-```sh
-sudo apt install -y python3 python3-pip python3-venv python3-dev
-```
-
-### create a venv
-Create a venv to keep the global environment clean
+Linux:
 ```sh
 python3 -m venv ~/admiser_venv
 source ~/admiser_venv/bin/activate
-pip install --upgrade pip wheel setuptools
 ```
 
-### install `ADMISER`
-From the repository root:
+### 2. install `ADMISER`
 ```sh
 pip install "admiser @ git+https://github.com/BowenZhao43811/admiser.git"
 ```
-> ⚠️ **Python version requirement**: Python ≥ 3.10 (enforced by `requires-python`)
 
-> ⚠️**Dependencies** `numpy`, `scipy`, `matplotlib`, `cppad_py` (Auto installations are provided in the next subsection).
-
-### install cppad and build cppad_py
+Or, from a clone of the repository — editable, together with the test tools — and
+check that everything works:
 ```sh
-admiser-install-cppad
+pip install -e ".[dev]"
+pytest
 ```
-> ⚠️ Only the minimum requirements are given here; for details on CppAD and cppad_py please refer to COIN-OR's official documentation.
+
+> ⚠️ **Python version requirement**: Python ≥ 3.10 (enforced by `requires-python`). `pip` installs the newest JAX your Python supports; JAX 0.11 needs Python ≥ 3.12, and on 3.10 / 3.11 `pip` falls back to an older JAX by itself.
+
+> ⚠️ **Dependencies** `numpy`, `scipy`, `matplotlib`, `jax` are installed automatically.
+
+> ℹ️ On a machine with an NVIDIA GPU, JAX may print *"An NVIDIA GPU may be present on this machine, but a CUDA-enabled jaxlib is not installed. Falling back to cpu."* That is harmless: ADMISER's problems are small and dense, which is exactly what the CPU is good at.
 
 ## Quickstart
 
@@ -113,7 +93,7 @@ Grab the file path, then open it with your preferred editor (remember to select 
     - *Path inequality* $h(t) ≤ 0$ → smooth hinge $L_ε(h)$; enforce $∫ L_ε(h) dt ≤ γ$ with $γ = Tε/4$ (see [Choosing ε and γ](#choosing-ε-and-γ)).
     - *Path equality* $h(t)=0$ → $∫ h^2 dt = 0$.
 
-- **AD with `cppad_py`**: build AD tapes (computational graph) for the objective $G_0(z)$ and the $i-th$ constraints $G_i(z)$ **once**; obtain function value, gradient/Jacobian for `SLSQP`.
+- **AD with JAX**: the whole problem — one RK4 rollout that feeds the objective $G_0(z)$ and every constraint $G_i(z)$ — is a single `jax.numpy` function. JAX compiles it **once** and differentiates it in **reverse mode**, whose cost grows with the number of outputs (one objective plus a handful of constraints), not with the number of control values. That is what makes reverse mode the right choice for control parametrization.
 
 ## Problem Template
 
@@ -122,9 +102,8 @@ Grab the file path, then open it with your preferred editor (remember to select 
 Create a problem file (e.g., `my_problem.py`) using the following simple template pattern (😊 A full template covering every supported constraint, `my_A_problem_template.py`, is in `admiser/templates`):
 ```py
 import numpy as np
-from functools import partial
+import jax.numpy as jnp            # model functions are written with jax.numpy
 from admiser import OCPProblem
-from admiser import rk4_substeps
 from admiser import make_builders
 
 # Grid
@@ -137,7 +116,7 @@ u0 = 1
 # Dynamics and stage cost
 def dyn(x, u, theta=None):
     x1, x2 = x
-    return np.array([x2, -x1 + u[0]], dtype=object)
+    return jnp.array([x2, -x1 + u[0]])
 
 def L(t, x, u, theta):
     return x[0]*x[0] + x[1]*x[1] + 0.25*(u[0]*u[0])
@@ -151,7 +130,7 @@ def control_bounds_builder(p): return [(-10.0, 10.0)] * (p.N * p.nu)
 # Assemble
 problem = OCPProblem(
     N=N, dt=dt, x0=x0, u0=u0, dyn=dyn,
-    integrator=partial(rk4_substeps, m_sub=10),
+    m_sub=10,                      # RK4 substeps per control segment
     nu=nu, nx=nx,
     objective_builder=objective_builder,
     control_bounds_builder=control_bounds_builder,
@@ -165,6 +144,7 @@ Then solve from a small driver script.
 from admiser import OCPSolver
 
 res = OCPSolver(problem).solve(maxiter=800, ftol=1e-9)
+print(res["status"], res["message"])   # 0 means converged; see "Solve Status"
 print(res["J_opt"])
 ```
 
@@ -173,17 +153,16 @@ print(res["J_opt"])
 The surface is deliberately small — almost every problem needs only these:
 
 ```py
-from admiser import OCPProblem, OCPSolver, make_builders, rk4_substeps
+from admiser import OCPProblem, OCPSolver, make_builders
 ```
 
 | name | what it is |
 |---|---|
 | `OCPProblem` | the problem, and the policies for how it should be solved |
 | `OCPSolver` | `solve()` and `to_nlp()` |
-| `make_builders` | assembles $\int L\,dt + \Phi$ into an objective builder |
-| `rk4_substeps` | the substep integrator you pass as `integrator=` |
+| `make_builders` | declares the objective $\int L\,dt + \Phi$ |
 | `QUAD_SCHEMES` | the quadrature schemes, their orders and costs |
-| `L_eps`, `smooth_abs` | AD-safe smoothing helpers, for use inside your own model functions |
+| `L_eps`, `smooth_abs` | JAX-safe smoothing helpers, for use inside your own model functions |
 
 Everything else lives in a named module and can be imported from there:
 
@@ -192,21 +171,23 @@ Everything else lives in a named module and can be imported from there:
 | `admiser.problem_definition` | `OCPProblem` |
 | `admiser.objective_builder` | `make_builders` |
 | `admiser.constraint_smoothing` | `L_eps`, `smooth_abs` |
-| `admiser.quadrature` | `rk4_substeps`, `rk4_step`, `QUAD_SCHEMES`, `quad_order` |
-| `admiser.ad_tape` | `build_ad_tape` — records the whole problem onto one tape |
-| `admiser.nlp_functions` | `NLPFunctions` — that tape presented to SciPy |
+| `admiser.quadrature` | `rk4_substep`, `rk4_substeps`, `rk4_step`, `QUAD_SCHEMES`, `quad_order` |
+| `admiser.ocp_to_nlp` | `build_nlp` — turns the whole problem into compiled NLP functions (JAX) |
+| `admiser.nlp_functions` | `NLPFunctions` — those functions presented to SciPy |
 | `admiser.problem_scaling` | `compute_scaling`, `ProblemScaling` |
-| `admiser.sqp_solver` | `OCPSolver` |
+| `admiser.sqp_solver` | `OCPSolver`, and the `STATUS_*` codes of [Solve Status](#solve-status) |
 
 > ℹ️ **`solve()` is the only solve entry point.** Whether the path-constraint transcription is solved once or by an ε→0 continuation is declared *in the problem*, with `problem.set_transcription(...)` — see [Choosing ε and γ](#choosing-ε-and-γ). The result dict has the same shape either way.
 >
 > If you want the transcribed NLP *without* solving it — to check the AD gradient against finite differences, say — use `to_nlp()`:
 > ```py
-> nlp = OCPSolver(problem).to_nlp()      # records the AD tape, runs no optimizer
+> nlp = OCPSolver(problem).to_nlp()      # builds the NLP, runs no optimizer
 > g_ad = nlp.objective_grad(z)
 > ```
 
-> ℹ️ **Figure Output**: Plotting of states and control trajectories is deliberately left out of the solver, so you keep full control over presentation. The raw optimisation results -- controls, system parameters, objective, states, and the residuals of the canonical equalities and inequalities -- are available as 
+> ℹ️ **Figure Output**: Plotting of states and control trajectories is deliberately left out of the solver, so you keep full control over presentation. The raw optimisation results -- how the solve ended, controls, system parameters, objective, states, and the residuals of the canonical equalities and inequalities -- are available as 
+`res["status"]`
+`res["message"]`
 `res["U_opt"]`
 `res.get("theta_opt", None)`
 `res["J_opt"]`
@@ -261,11 +242,11 @@ $$\int_0^T L_ε(h(t))\,dt \le γ .$$
 
 ### ε-continuation
 
-Small ε gives a tight approximation but a nearly nonsmooth NLP; large ε is smooth but loose. The standard remedy is to start large and shrink, warm-starting each solve. Declare it **in the problem definition** — the solving side never has to know:
+Small ε gives a tight approximation but a nearly nonsmooth NLP; large ε is smooth but loose. The standard remedy is to start large and shrink, warm-starting each solve from the previous one — the approximation goes from **inexact to exact**. Declare it **in the problem definition**; the solving side never has to know:
 
 ```py
 # in my_problem.py, next to the constraint it governs
-problem.add_path_ineq(hfun=hfun, eps=1e-4)      # eps is the *final* value; gamma auto = Teps/4
+problem.add_path_ineq(hfun=hfun, eps=1e-1)      # eps is the STARTING value; gamma auto = T*eps/4
 problem.set_transcription(mode="continuation", n_rounds=4, shrink=0.1)
 ```
 
@@ -274,21 +255,41 @@ problem.set_transcription(mode="continuation", n_rounds=4, shrink=0.1)
 res = OCPSolver(problem).solve(maxiter=1000, ftol=1e-12)
 
 for r in res["rounds"]:
-    print(r["eps"], r["gamma"], r["J_opt"], r["max_path_viol"], r["status"])
+    print(r["eps"], r["gamma"], r["J_opt"], r["max_path_viol"], r["scipy_status"])
 ```
 
 ```
-[ADMISER] round 1/4 eps=1.000e-01  J=+0.14636838  max h(t)=+7.975e-02  status=0  nit=95
-[ADMISER] round 2/4 eps=1.000e-02  J=+0.167629    max h(t)=+7.649e-03  status=0  nit=106
-[ADMISER] round 3/4 eps=1.000e-03  J=+0.1700801   max h(t)=+1.144e-05  status=0  nit=131
-[ADMISER] round 4/4 eps=1.000e-04  J=+0.17042904  max h(t)=-5.965e-04  status=0  nit=107
+[ADMISER] round 1/4  eps=1.000e-01  J=+0.14636838  max h(t)=+7.975e-02  SLSQP status=0  nit=89
+[ADMISER] round 2/4  eps=1.000e-02  J=+0.167629  max h(t)=+7.646e-03  SLSQP status=0  nit=98
+[ADMISER] round 3/4  eps=1.000e-03  J=+0.1700801  max h(t)=+1.136e-05  SLSQP status=0  nit=124
+[ADMISER] round 4/4  eps=1.000e-04  J=+0.17042904  max h(t)=-5.966e-04  SLSQP status=0  nit=106
+[ADMISER] status 0: every round converged (returning round 4/4)
 ```
 
-The starting ε is given as a **ratio**, not an absolute value: ε carries the units of its own `h`, so several path constraints cannot share one absolute start — but they can share a shrink ratio. Each constraint runs `eps/shrink^(n_rounds-1) → … → eps`, landing exactly on its registered value in the final round.
+The rounds run `eps → eps·shrink → eps·shrink² → …`, `n_rounds` of them, each warm-started from the one before. `gamma` shrinks along with `eps`: a `gamma` left automatic is re-derived as $Tε/4$ each round, and an explicitly given `gamma` is multiplied by the same `shrink` factor as `eps`. Each path constraint keeps its own `eps` — ε carries the units of its own `h` — and they all share the shrink ratio.
 
-`mode="single"` (the default, and what you get if you never call `set_transcription`) is simply the one-round case, so both modes go through the same code path and return the same result shape — `rounds` just has length 1. `gamma` is re-derived as $Tε/4$ each round for constraints registered without an explicit `gamma`; an explicitly given `gamma` stays fixed. `eps` is baked into the tape as a constant, so each round re-records the tape (cheap relative to the SQP iterations).
+**The continuation stops at the first round that fails** — SLSQP has then reached the smallest ε it can still handle — and returns the last round that converged. `res["status"]` says why it stopped; see [Solve Status](#solve-status). `res["final_eps"]` and `res["final_gamma"]` say where the returned solution was solved.
 
-`solve()` never mutates the problem: ε is only scaled inside the round and restored afterwards, so the same `problem` can be solved repeatedly with identical results.
+`mode="single"` (the default, and what you get if you never call `set_transcription`) is simply the one-round case: it solves once at the registered `eps`. Both modes go through the same code path and return the same result shape — `rounds` just has length 1.
+
+ε and γ are passed into the compiled NLP as **arguments**, so all rounds share one compilation, and `solve()` never mutates the problem: the same `problem` can be solved repeatedly with identical results.
+
+## Solve Status
+
+`res["status"]` is ADMISER's own code for how the solve as a whole ended — every round of a continuation, or the single round of a plain solve:
+
+| `status` | meaning | what is returned |
+|---|---|---|
+| **0** | every round converged | the last round |
+| **1** | a round hit the SLSQP iteration limit (`maxiter`) | that round's iterate — usually far better than its starting point, but **not converged** |
+| **2** | a later round failed for another reason | the last round that converged |
+| **3** | the first round already failed | its iterate anyway, since there is nothing better — **not converged** |
+
+`res["message"]` is the readable form, and `res["success"]` is `status == 0`. Anything other than 0 also raises a `RuntimeWarning`, so a result that did not converge is never returned silently. The codes are defined in `admiser.sqp_solver` as `STATUS_CONVERGED`, `STATUS_MAX_ITERATIONS`, `STATUS_SLSQP_FAILURE` and `STATUS_NO_ROUND_SUCCEEDED`.
+
+SciPy's own SLSQP status of every round is kept in `res["rounds"][k]["scipy_status"]`, with its `message` and `nit`. The ones you will meet most often: `0` converged, `4` inequality constraints incompatible (infeasible), `8` positive directional derivative in the line search (often a scaling problem), `9` iteration limit reached.
+
+> ⚠️ Status 0 is necessary, not sufficient. Also look at `eq_resid`, `ineq_resid` and `path_viol` before trusting a result.
 
 ## Automatic Scaling
 
@@ -360,9 +361,10 @@ Constraint scaling on its own is a smaller effect: measured across all examples 
 saves about 8% of the total iterations, with one problem
 (`my_free_terminal_time2`) taking half as many and none becoming less feasible.
 
-> ℹ️ The tape always holds **your** problem, unscaled. Scaling is applied only at
-> the boundary with SciPy, so `to_nlp()` hands back your own problem — a gradient
-> checked there against finite differences is the gradient of what you wrote.
+> ℹ️ The compiled NLP always computes **your** problem, unscaled. Scaling is
+> applied only at the boundary with SciPy, so `to_nlp()` hands back your own
+> problem — a gradient checked there against finite differences is the gradient
+> of what you wrote.
 
 > ℹ️ The factors are estimated from **fixed** probe offsets around the initial
 > guess, never random ones, so the same problem always produces the same factors
@@ -384,7 +386,7 @@ Set it with `make_builders(quad=...)`, or globally with `problem.quad_scheme` (w
 
 `QUAD_SCHEMES` is the single source of scheme names — there are no aliases. A misspelled or outdated name raises immediately rather than being silently accepted as a different accuracy.
 
-Every scheme reuses the $k_1..k_4$ that RK4 already computed, so **none of them cost extra evaluations of `dyn`**. `n_eval` is the number of *integrand* evaluations per substep — it is what drives AD tape size, so the price of a higher order is a bigger tape, not a second ODE solve.
+Every scheme reuses the $k_1..k_4$ that RK4 already computed, so **none of them cost extra evaluations of `dyn`**. `n_eval` is the number of *integrand* evaluations per substep, so the price of a higher order is a few more integrand evaluations, not a second ODE solve.
 
 Measured orders on $\dot x = x,\ g = t^2 x,\ \int_0^1 t^2 e^t\,dt = e-2$:
 
@@ -409,19 +411,34 @@ A scheme's order is capped by **both** the quadrature rule and the accuracy of t
 
 Programmatic access: `admiser.QUAD_SCHEMES` maps each name to its order, `n_eval` and a one-line summary. `quad_order(name)` and `validate_quad_scheme(name)` live in `admiser.quadrature`.
 
-## Writing AD-safe Model Functions
+## Writing Model Functions for JAX
 
-Your `dyn`, `L`, `Phi`, `qfun` and `hfun` are executed **once**, on `a_double` values, to record the tape. Anything that is not a recorded CppAD operation gets frozen at the recording point:
+While the solver builds the NLP, your `dyn`, `L`, `Phi`, `qfun`, `hfun`, terminal functions and `x0_from_theta` are not called on plain numbers. JAX calls them with **tracers**: stand-ins that record every operation, so that the whole computation can be compiled and differentiated. Two rules follow.
+
+**1. Use `jax.numpy`, not `numpy`.**
+
+- ✅ `jnp.array([dx1, dx2])`, `jnp.exp`, `jnp.sin`, `jnp.sqrt`, `**` and ordinary arithmetic
+- ❌ `np.array([...], dtype=object)`, `np.exp(...)` — NumPy cannot look inside a tracer
+
+**2. Decide with `jnp.where`, not with `if`.**
 
 ```py
 def dyn(x, u, theta=None):
-    if u[0] > 0:                 # ❌ this branch is decided once, at the taping point,
-        return np.array([u[0]], dtype=object)   #    and silently reused for every z
-    return np.array([-u[0]], dtype=object)
+    if u[0] > 0:                          # ❌ a tracer has no True/False value yet
+        return jnp.array([u[0]])
+    return jnp.array([-u[0]])
+
+def dyn(x, u, theta=None):                # ✅ both branches are recorded, and the
+    return jnp.array([jnp.where(u[0] > 0, u[0], -u[0])])   # right one is picked every time
 ```
 
-- ❌ Python `if` / `min` / `max` / `abs` / `np.where` on AD values, and `float(...)` casts of them.
-- ✅ `np.exp/sin/cos/sqrt/**` on `a_double` (they dispatch to CppAD operations), and `admiser.L_eps` / `admiser.smooth_abs`, which use `cond_assign` so the comparison is recorded as a real `CondExp` operator and re-evaluated on every pass.
+For the same reason, do not call `float(...)` or `int(...)` on a state, a control or a parameter. Branching on things that are fixed — `N`, a flag, `theta is None` — is fine.
+
+Breaking a rule raises a `TypeError` straight away, before any optimisation starts, with these hints attached. (Under the CppAD backend of earlier versions, the same `if` was silently frozen into the tape and produced wrong derivatives without any error.)
+
+`admiser.L_eps` and `admiser.smooth_abs` follow the rules, so you can use them inside your own functions. Your functions still accept plain NumPy arrays too, so you can call them directly to evaluate or plot a constraint.
+
+> ℹ️ Importing `admiser` switches JAX to 64-bit floats for the whole Python process, because SLSQP needs the precision. Other JAX code running in the same session will compute in 64-bit as well.
 
 ## Time Scaling (CPET)
 
@@ -532,6 +549,10 @@ For the latest theoretical and computational methods based on control parameteri
    
 **Teo, K.L., Li, B., Yu, C., & Rehbock, V.** (2021). *Applied and Computational Optimal Control: A Control Parametrization Approach*. Springer Optimization and Its Applications (Vol. 171). Springer International Publishing. https://doi.org/10.1007/978-3-030-69913-0
 
-The gradient process is facilitated by using the automatic differentiation technique to replace the continuous adjoint in Teo's original method. AD is achieved by using the following off-the-shelf tools.
+The gradient process is facilitated by using the automatic differentiation technique to replace the continuous adjoint in Teo's original method. AD is achieved by using the following off-the-shelf tool.
+
+**Bradbury, J., Frostig, R., Hawkins, P., Johnson, M.J., Leary, C., Maclaurin, D., Necula, G., Paszke, A., VanderPlas, J., Wanderman-Milne, S., & Zhang, Q.** (2018). *JAX: composable transformations of Python+NumPy programs*. http://github.com/jax-ml/jax
+
+Earlier versions of ADMISER used CppAD for the same purpose:
 
 **Bell, B.** (2007). *CppAD: A package for C++ algorithmic differentiation*. http://www.coin-or.org/CppAD
